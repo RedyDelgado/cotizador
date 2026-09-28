@@ -1,0 +1,6 @@
+.env
+data/
+logs/
+venv/
+preview.html
+__pycache__/

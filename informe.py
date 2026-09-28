@@ -1,0 +1,607 @@
+"""Diseño del informe diario: HTML para correo y su versión en texto plano.
+
+Formato de informe profesional: encabezado institucional, resumen ejecutivo con indicadores,
+tablas de datos con cabecera, etiquetas de estado y fichas técnicas. Paleta de Tailwind CSS
+(navy/blue para el acento, gray para neutros), iconos Lucide (los mismos de lucide-react) y
+nada de emojis. Todo va en línea: Gmail descarta <style>, clases y SVG, por eso los iconos
+viajan como PNG adjuntos.
+"""
+import base64
+import functools
+import html
+import re
+from urllib.parse import quote
+
+import pymupdf
+
+import seace
+import uniq
+
+DIAS_ALERTA = 2   # "cierra pronto" si quedan 2 días o menos
+MAX_ITEMS = 15    # ítems del TDR por ficha
+MAX_FILAS = 15    # filas por palabra clave
+
+FUENTE = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+# Contraste WCAG sobre blanco: texto 17:1, cuerpo 10:1, suave 4.8:1, enlace 8.6:1, rojo 6.5:1.
+C = {
+    "navy": "#0B2545",        # títulos y barra superior
+    "azul": "#1D4ED8",        # blue-700: botones, iconos de ficha
+    "enlace": "#1E40AF",      # blue-800: enlaces y etiquetas
+    "azul_tinta": "#EFF6FF",  # blue-50
+    "azul_borde": "#BFDBFE",  # blue-200
+    "texto": "#111827",       # gray-900
+    "cuerpo": "#374151",      # gray-700
+    "suave": "#6B7280",       # gray-500
+    "linea": "#E5E7EB",       # gray-200
+    "cabecera": "#F9FAFB",    # gray-50: cabeceras de tabla
+    "fondo": "#F3F4F6",       # gray-100: fondo del correo
+    "rojo": "#B91C1C",        # red-700: solo lo que cierra en <= 2 días y las fallas
+    "rojo_tinta": "#FEF2F2",
+    "rojo_borde": "#FECACA",
+}
+BLANCO = "#FFFFFF"
+
+# Iconos Lucide (licencia ISC, https://lucide.dev): contenido del <svg> de 24x24.
+GLIFOS = {
+    "chart-column": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    "search": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    "landmark": '<line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/>',
+    "file-text": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+    "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+    "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>',
+    "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    "target": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    "package": '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+    "list-checks": '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+    "truck": '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
+    "credit-card": '<rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/>',
+    "banknote": '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+    "shield-check": '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+    "scale": '<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
+    "layers": '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+}
+# nombre de uso: (glifo, color)
+ICONOS = {
+    "s_resumen": ("chart-column", C["navy"]),
+    "s_coinc": ("search", C["navy"]),
+    "s_uniq": ("landmark", C["navy"]),
+    "s_fichas": ("file-text", C["navy"]),
+    "s_fuentes": ("database", C["navy"]),
+    "aviso": ("triangle-alert", C["rojo"]),
+    "abrir": ("external-link", BLANCO),
+    "pdf": ("file-text", BLANCO),
+    "objetivo": ("target", C["azul"]),
+    "items": ("package", C["azul"]),
+    "requisitos": ("list-checks", C["azul"]),
+    "plazo": ("truck", C["azul"]),
+    "pago": ("credit-card", C["azul"]),
+    "adelanto": ("banknote", C["azul"]),
+    "garantia": ("shield-check", C["azul"]),
+    "penalidad": ("scale", C["azul"]),
+    "tecnico": ("layers", C["azul"]),
+    "error_pdf": ("triangle-alert", C["rojo"]),
+}
+
+
+@functools.lru_cache(maxsize=None)
+def png_icono(nombre):
+    """PNG a 3x (nítido en pantallas retina) del icono Lucide, fondo transparente."""
+    glifo, color = ICONOS[nombre]
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
+           f'stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{GLIFOS[glifo]}</svg>')
+    with pymupdf.open(stream=svg.encode(), filetype="svg") as doc:
+        return doc[0].get_pixmap(matrix=pymupdf.Matrix(3, 3), alpha=True).tobytes("png")
+
+
+def img(nombre, px, estilo="display:block"):
+    # alt vacío: son decorativos, el texto de al lado ya dice lo mismo (lectores de pantalla los saltan).
+    return f'<img src="cid:ico-{nombre}" width="{px}" height="{px}" alt="" style="{estilo};border:0">'
+
+
+def con_data_uri(cuerpo_html):
+    """Para preview.html: el navegador no entiende cid:, se incrustan los PNG en base64."""
+    return re.sub(r"cid:ico-([\w-]+)", lambda m: "data:image/png;base64," +
+                  base64.b64encode(png_icono(m.group(1))).decode(), cuerpo_html)
+
+
+# -------------------------------------------------------------------- texto
+
+# Siglas que se conservan al pasar a minúsculas un texto que viene TODO EN MAYÚSCULAS.
+# ponytail: una sigla que no esté aquí queda en minúscula; se agrega a la lista y listo.
+SIGLAS = {"UNIQ", "TDR", "EETT", "RNP", "RUC", "CCI", "UEI", "UIT", "DIGEMID", "OSINERGMIN", "SUNAT",
+          "MINEM", "SAC", "EIRL", "PVC", "LED", "UV", "UI", "GPS", "CPU", "PC", "TI", "TIC", "CUI",
+          "I", "II", "III", "IV"}
+MENORES_NOMBRE = {"de", "del", "la", "las", "los", "el", "y", "e", "en", "para", "por", "con", "a", "al"}
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+         "septiembre", "octubre", "noviembre", "diciembre"]
+DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+
+def h(valor):
+    return html.escape(str(valor))
+
+
+def recortar(texto, n):
+    return uniq.recortar(texto, n)
+
+
+def en_mayusculas(texto):
+    letras = [ch for ch in texto if ch.isalpha()]
+    return bool(letras) and sum(ch.isupper() for ch in letras) >= 0.8 * len(letras)
+
+
+def oracion(texto):
+    """"ADQUISICIÓN DE GASOHOL - UNIQ" -> "Adquisición de gasohol - UNIQ". Deja igual lo que ya
+    viene en minúsculas; conserva siglas conocidas y palabras con números ("S10", "01-A")."""
+    if not en_mayusculas(texto):
+        return texto
+    palabras = [p if p.strip(".,;:()\"'“”-–") in SIGLAS or any(ch.isdigit() for ch in p) else p.lower()
+                for p in texto.split(" ")]
+    s = " ".join(palabras)
+    i = next((k for k, ch in enumerate(s) if ch.isalpha()), 0)
+    return s[:i] + s[i:i + 1].upper() + s[i + 1:]
+
+
+def nombre_propio(texto):
+    """Nombres de entidades en MAYÚSCULAS -> "Municipalidad Provincial de La Convención".
+    Conserva siglas conocidas y las que no tienen vocales ("MTC", "DRTC")."""
+    if not en_mayusculas(texto):
+        return texto
+
+    def parte(p, primera):
+        base = p.strip(".,;:()\"'“”")
+        if base in SIGLAS or (len(base) > 1 and base.isalpha() and not any(v in base for v in "AEIOUÁÉÍÓÚ")):
+            return p
+        return p.lower() if p.lower() in MENORES_NOMBRE and not primera else p.capitalize()
+
+    return " ".join("-".join(parte(q, i == 0 and j == 0) for j, q in enumerate(p.split("-")))
+                    for i, p in enumerate(texto.split()))
+
+
+def fecha_larga(d):
+    return f"{DIAS_SEMANA[d.weekday()].capitalize()} {d.day} de {MESES[d.month - 1]} de {d.year}"
+
+
+def dia_mes(d):
+    return f"{d.day} {MESES[d.month - 1][:3]}"
+
+
+def fecha_corta(d):
+    return f"{dia_mes(d)} · {d:%H:%M}"
+
+
+def dias_hasta(d, ahora):
+    return (d.date() - ahora.date()).days
+
+
+def cuando(d, ahora):
+    """"Hoy 23:00", "Mañana 16:00" o "30 sep"."""
+    dias = dias_hasta(d, ahora)
+    return f"Hoy {d:%H:%M}" if dias == 0 else f"Mañana {d:%H:%M}" if dias == 1 else dia_mes(d)
+
+
+def vence(dias):
+    return "vence hoy" if dias == 0 else "vence mañana" if dias == 1 else f"quedan {dias} días"
+
+
+def plural(n, uno, varios):
+    return f"{n} {uno if n == 1 else varios}"
+
+
+def mostrar(frase):
+    """software -> «software»; "sistema académico" (frase exacta) -> “sistema académico”."""
+    return f"“{frase[1:-1]}”" if seace.es_exacta(frase) else f"«{frase}»"
+
+
+# -------------------------------------------------------------- componentes
+
+def etiqueta(texto, tono="gris"):
+    """Etiqueta de estado rectangular (NUEVO, CIERRA HOY, fuente, palabra clave)."""
+    color, fondo, borde = {
+        "azul": (C["enlace"], C["azul_tinta"], C["azul_borde"]),
+        "rojo": (C["rojo"], C["rojo_tinta"], C["rojo_borde"]),
+        "gris": (C["cuerpo"], C["fondo"], C["linea"]),
+        "contorno": (C["enlace"], BLANCO, C["azul_borde"]),
+    }[tono]
+    return (f'<span style="display:inline-block;margin:0 4px 4px 0;padding:1px 6px;border:1px solid {borde};'
+            f'border-radius:4px;background:{fondo};color:{color};font-size:11px;line-height:16px;font-weight:600;'
+            f'letter-spacing:0.02em">{h(texto)}</span>')
+
+
+def boton(url, texto, icono="abrir"):
+    return (f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px"><tr>'
+            f'<td style="background:{C["azul"]};border-radius:6px">'
+            f'<a href="{h(url)}" style="display:inline-block;padding:9px 14px;color:{BLANCO};text-decoration:none;'
+            f'font-size:13px;line-height:18px;font-weight:600">'
+            f'{img(icono, 14, "display:inline-block;vertical-align:-2px;margin-right:6px")}{h(texto)}</a>'
+            f'</td></tr></table>')
+
+
+def seccion(numero, icono, titulo, nota=""):
+    """Encabezado numerado de sección, con regla inferior."""
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:36px 0 14px">'
+            f'<tr><td style="border-bottom:2px solid {C["navy"]};padding-bottom:8px">'
+            f'<div style="font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.08em;color:{C["suave"]}">'
+            f'SECCIÓN {numero}</div>'
+            f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:2px"><tr>'
+            f'<td valign="middle" style="padding-right:8px">{img(icono, 18)}</td>'
+            f'<td valign="middle" style="font-size:18px;line-height:24px;font-weight:700;color:{C["navy"]}">{h(titulo)}</td>'
+            f'</tr></table></td></tr></table>'
+            + (f'<p style="margin:-4px 0 14px;font-size:13px;line-height:19px;color:{C["suave"]}">{h(nota)}</p>'
+               if nota else ""))
+
+
+def tabla(cabeceras, filas):
+    """Tabla de datos con borde y cabecera gris. cabeceras = [(texto, alineación)]."""
+    th = "".join(f'<th align="{al}" style="padding:8px 12px;background:{C["cabecera"]};border-bottom:1px solid {C["linea"]};'
+                 f'font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.06em;color:{C["suave"]};'
+                 f'text-transform:uppercase;text-align:{al}">{h(t)}</th>' for t, al in cabeceras)
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {C["linea"]};'
+            f'border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;margin:0 0 12px">'
+            + (f'<tr>{th}</tr>' if th else "") + f'{filas}</table>')
+
+
+def fila(i, titulo, url, etiquetas, detalle, fecha, pie_fecha, urgente=False):
+    """Fila de oportunidad: título (enlace), etiquetas y detalle; a la derecha la fecha."""
+    borde = f"border-top:1px solid {C['linea']};" if i else ""
+    enlace = (f'<a href="{h(url)}" style="color:{C["texto"]};text-decoration:none">{h(titulo)}</a>' if url else h(titulo))
+    color = C["rojo"] if urgente else C["texto"]
+    return (f'<tr><td valign="top" style="{borde}padding:12px">'
+            f'<div style="font-size:14px;line-height:20px;font-weight:600;color:{C["texto"]}">{enlace}</div>'
+            f'<div style="margin-top:6px">{etiquetas}</div>'
+            f'<div style="font-size:12px;line-height:18px;color:{C["suave"]}">{h(detalle)}</div></td>'
+            f'<td valign="top" align="right" style="{borde}padding:12px;white-space:nowrap;text-align:right">'
+            f'<div style="font-size:13px;line-height:20px;font-weight:600;color:{color}">{h(fecha)}</div>'
+            f'<div style="font-size:11px;line-height:16px;color:{C["suave"]}">{h(pie_fecha)}</div></td></tr>')
+
+
+def fila_nota(texto, url=None, enlace="", primera=False):
+    extra = (f' <a href="{h(url)}" style="color:{C["enlace"]};text-decoration:none;font-weight:600">{h(enlace)}</a>'
+             if url else "")
+    borde = "" if primera else f"border-top:1px solid {C['linea']};"
+    return (f'<tr><td colspan="2" style="{borde}padding:12px;font-size:13px;line-height:19px;'
+            f'color:{C["suave"]}">{h(texto)}{extra}</td></tr>')
+
+
+def subtitulo(texto, detalle, url=None, enlace=""):
+    derecha = (f'<a href="{h(url)}" style="color:{C["enlace"]};text-decoration:none;font-weight:600">{h(enlace)}</a>'
+               if url else "")
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 8px"><tr>'
+            f'<td style="font-size:15px;line-height:20px;font-weight:700;color:{C["texto"]}">{h(texto)}'
+            f'<span style="font-weight:400;color:{C["suave"]}"> · {h(detalle)}</span></td>'
+            f'<td align="right" style="font-size:13px;line-height:20px;text-align:right;white-space:nowrap">{derecha}</td>'
+            f'</tr></table>')
+
+
+def envolver(cuerpo, titulo):
+    return (f'<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">'
+            f'<title>{h(titulo)}</title></head>'
+            f'<body style="margin:0;padding:0;background:{C["fondo"]};-webkit-text-size-adjust:100%">'
+            f'<div style="background:{C["fondo"]};padding:24px 10px;font-family:{FUENTE};color:{C["texto"]}">'
+            f'<div style="max-width:680px;margin:0 auto;background:{BLANCO};border:1px solid {C["linea"]};'
+            f'border-radius:8px;overflow:hidden">'
+            f'<div style="height:5px;background:{C["navy"]}"></div>'
+            f'<div style="padding:26px 24px 28px">{cuerpo}</div></div></div></body></html>')
+
+
+# ---------------------------------------------------------- partes del informe
+
+def marca(titulo, ahora):
+    """Encabezado institucional: nombre del producto, título del documento y fecha de emisión."""
+    return (f'<div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.12em;color:{C["azul"]}">'
+            f'MONITOR DE CONTRATACIONES PÚBLICAS</div>'
+            f'<div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-0.3px;color:{C["navy"]};'
+            f'margin-top:6px">{h(titulo)}</div>'
+            f'<div style="font-size:13px;line-height:19px;color:{C["suave"]};margin-top:4px">'
+            f'{h(fecha_larga(ahora))} · Emitido a las {ahora:%H:%M} (hora de Lima)</div>')
+
+
+def encabezado(ahora, palabras):
+    chips = "".join(etiqueta(mostrar(p) if seace.es_exacta(p) else p, "contorno") for p in palabras) or (
+        f'<span style="font-size:13px;color:{C["suave"]}">ninguna (define PALABRAS_CLAVE en .env)</span>')
+    return (marca("Informe diario de oportunidades", ahora) +
+            f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px"><tr>'
+            f'<td valign="top" style="padding:1px 8px 0 0;font-size:12px;line-height:18px;font-weight:600;color:{C["cuerpo"]};'
+            f'white-space:nowrap">Palabras clave:</td><td>{chips}</td></tr></table>')
+
+
+def aviso_fuentes(fuentes):
+    caidas = [nombre for nombre, ok, _, _ in fuentes if not ok]
+    if not caidas:
+        return ""
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;'
+            f'background:{C["rojo_tinta"]};border:1px solid {C["rojo_borde"]};border-radius:6px"><tr>'
+            f'<td width="30" valign="top" style="padding:12px 0 0 12px">{img("aviso", 16)}</td>'
+            f'<td style="padding:11px 12px;font-size:13px;line-height:19px;color:{C["rojo"]}">'
+            f'<b>Informe incompleto.</b> No respondió: {h(", ".join(caidas))}. El detalle está en la sección de fuentes.'
+            f'</td></tr></table>')
+
+
+def indicadores(cifras):
+    """Fila de indicadores del resumen ejecutivo: [(número, etiqueta, urgente)]."""
+    celdas = ""
+    for i, (n, texto, urgente) in enumerate(cifras):
+        borde = f"border-left:1px solid {C['linea']};" if i else ""
+        color = C["rojo"] if urgente and n else C["navy"]
+        celdas += (f'<td width="{100 // len(cifras)}%" valign="top" style="{borde}padding:14px 12px">'
+                   f'<div style="font-size:26px;line-height:30px;font-weight:700;color:{color}">{n}</div>'
+                   f'<div style="font-size:11px;line-height:15px;font-weight:600;letter-spacing:0.04em;color:{C["suave"]};'
+                   f'margin-top:4px;text-transform:uppercase">{h(texto)}</div></td>')
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {C["linea"]};'
+            f'border-radius:8px;border-collapse:separate;border-spacing:0">'
+            f'<tr>{celdas}</tr></table>')
+
+
+def fecha_proceso(x, ahora):
+    """(fecha, texto de abajo, urgente) para la columna derecha de un proceso."""
+    if x["cierre"]:
+        if not x["abierta"]:
+            return dia_mes(x["inicio"]), "abre la cotización", False
+        return cuando(x["cierre"], ahora), "cierre", dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA
+    return dia_mes(x["convocatoria"]), "convocatoria", False
+
+
+def etiquetas_proceso(x, ahora):
+    marcas = etiqueta("NUEVO", "azul") if x["nuevo"] else ""
+    if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA:
+        marcas += etiqueta("CIERRA PRONTO", "rojo")
+    return marcas + etiqueta(f'{x["fuente"]} · {x["tipo"]}', "gris")
+
+
+def detalle_proceso(x):
+    return " · ".join(filter(None, [nombre_propio(x["entidad"]), x["codigo"],
+                                    f'S/ {x["monto"]:,.0f}' if x["monto"] else ""]))
+
+
+def visibles(items):
+    """Lo que se lista: lo nuevo y todo lo que aún se puede cotizar. Los procedimientos ya informados
+    (siguen 30 días en la ventana) quedan en una línea: repetirlos a diario solo sería ruido."""
+    return [x for x in items if x["nuevo"] or x["cierre"]]
+
+
+def html_coincidencias(grupos, ahora):
+    cabeceras = [("Oportunidad", "left"), ("Fecha", "right")]
+    salida = ""
+    for frase, items in grupos:
+        lista = visibles(items)
+        previos = len(items) - len(lista)
+        busqueda = seace.BUSQUEDA_OCDS.format(quote(frase.strip('"')))
+        filas = "".join(fila(i, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
+                             detalle_proceso(x), *fecha_proceso(x, ahora))
+                        for i, x in enumerate(lista[:MAX_FILAS]))
+        if len(lista) > MAX_FILAS:
+            filas += fila_nota(f"y {len(lista) - MAX_FILAS} más.", busqueda, "Ver todos en el portal")
+        if previos:
+            filas += fila_nota(f"{plural(previos, 'procedimiento ya informado sigue', 'procedimientos ya informados siguen')}"
+                               f" en la ventana de {seace.DIAS_OCDS} días.", busqueda, "Ver en el portal", primera=not lista)
+        if not items:
+            filas = fila_nota("Sin coincidencias en este momento.", primera=True)
+        salida += subtitulo(mostrar(frase), plural(len(items), "resultado", "resultados"), busqueda, "Buscar en el portal")
+        # Sin filas de datos, una tabla con cabecera vacía se ve rota: basta el recuadro con la nota.
+        salida += tabla(cabeceras if lista else [], filas)
+    return salida
+
+
+def html_uniq(convs, ahora):
+    filas = ""
+    for i, c in enumerate(convs):
+        dias = dias_hasta(c["limite"], ahora)
+        marcas = etiqueta("NUEVA", "azul") if c["nueva"] else ""
+        if dias <= DIAS_ALERTA:
+            marcas += etiqueta("CIERRA PRONTO", "rojo")
+        if c.get("coincide"):
+            marcas += etiqueta(f'Coincide: {c["coincide"]}', "contorno")
+        if c["desierta"]:
+            marcas += etiqueta("Sin postores en la anterior", "gris")
+        conv = f' · {c["convocatoria"]}ª convocatoria' if c["convocatoria"] > 1 else ""
+        detalle = f'{c["tipo"]} · N° {c["numero"]}{conv} · {nombre_propio(c["dependencia"])}'
+        filas += fila(i, recortar(oracion(c["titulo"]), 140), c["tdr_url"] or uniq.URL_PAGINA, marcas, detalle,
+                      cuando(c["limite"], ahora), "fecha límite", dias <= DIAS_ALERTA)
+    return tabla([("Cotización", "left"), ("Vence", "right")], filas)
+
+
+def html_parrafos(texto):
+    """Texto del PDF -> HTML: los renglones cortos en mayúsculas pasan a subtítulo."""
+    partes = []
+    for linea in texto.split("\n"):
+        rotulo = linea.startswith("— ") and linea.endswith(" —")
+        if rotulo or (linea.isupper() and len(linea) <= 60):
+            partes.append(f'<div style="font-weight:600;color:{C["texto"]};margin-top:8px">'
+                          f'{h(oracion(linea.strip("— ")))}</div>')
+        else:
+            if partes and not partes[-1].endswith("</div>"):
+                partes.append("<br>")
+            partes.append(h(oracion(linea)))
+    return "".join(partes)
+
+
+def bloque_ficha(icono, titulo, contenido):
+    return (f'<tr><td style="padding:14px 16px 0">'
+            f'<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
+            f'<td valign="middle" style="padding-right:6px">{img(icono, 14)}</td>'
+            f'<td valign="middle" style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.06em;'
+            f'color:{C["enlace"]}">{h(titulo.upper())}</td></tr></table>'
+            f'<div style="margin-top:4px;font-size:13px;line-height:20px;color:{C["cuerpo"]}">{contenido}</div>'
+            f'</td></tr>')
+
+
+def html_ficha(c, ahora):
+    """Ficha técnica de una cotización UNIQ nueva: datos del sistema + extracto del TDR/EETT."""
+    dias = dias_hasta(c["limite"], ahora)
+    conv = f' · {c["convocatoria"]}ª convocatoria' if c["convocatoria"] > 1 else ""
+    marcas = etiqueta("CIERRA PRONTO", "rojo") if dias <= DIAS_ALERTA else ""
+    if c.get("coincide"):
+        marcas += etiqueta(f'Coincide: {c["coincide"]}', "contorno")
+    if c["desierta"]:
+        marcas += etiqueta("Sin postores en la anterior", "gris")
+
+    datos = [("Fecha límite", f'{fecha_corta(c["limite"])} ({vence(dias)})'),
+             ("Dependencia", nombre_propio(c["dependencia"])), ("Área usuaria", c["correo"]),
+             ("Financiamiento", nombre_propio(c["fuente"])),
+             ("Plazo de entrega", f'{c["plazo_entrega"]} días' if c["plazo_entrega"] else "")]
+    filas = "".join(f'<tr><td width="36%" valign="top" style="padding:6px 12px 6px 0;border-bottom:1px solid {C["linea"]};'
+                    f'font-size:12px;line-height:18px;color:{C["suave"]}">{h(k)}</td>'
+                    f'<td valign="top" style="padding:6px 0;border-bottom:1px solid {C["linea"]};font-size:13px;'
+                    f'line-height:18px;color:{C["texto"]}">{h(v)}</td></tr>' for k, v in datos if v)
+    cuerpo = (f'<tr><td style="padding:6px 16px 0"><table role="presentation" width="100%" cellpadding="0" '
+              f'cellspacing="0">{filas}</table></td></tr>')
+
+    if c["items"]:
+        lis = "".join(f'<tr><td style="padding:4px 10px 4px 0;border-bottom:1px solid {C["linea"]}">{h(oracion(n))}</td>'
+                      f'<td align="right" style="padding:4px 0;border-bottom:1px solid {C["linea"]};text-align:right;'
+                      f'white-space:nowrap;font-weight:600;color:{C["texto"]}">{h(q)}</td></tr>'
+                      for n, q in c["items"][:MAX_ITEMS])
+        if len(c["items"]) > MAX_ITEMS:
+            lis += f'<tr><td colspan="2" style="padding:4px 0">y {len(c["items"]) - MAX_ITEMS} ítems más en el PDF</td></tr>'
+        cuerpo += bloque_ficha("items", f"Ítems ({len(c['items'])})",
+                               f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{lis}</table>')
+    for clave, titulo, _, _ in uniq.SECCIONES:
+        if c["secciones"].get(clave):
+            cuerpo += bloque_ficha(clave, titulo, html_parrafos(c["secciones"][clave]))
+    if c["error_pdf"]:
+        cuerpo += bloque_ficha("error_pdf", f'No se pudo leer el {c["doc"]}', h(c["error_pdf"]))
+    if c["tdr_url"]:
+        abrir = boton(c["tdr_url"], f'Abrir {c["doc"]} completo (PDF)', "pdf")
+        cuerpo += f'<tr><td style="padding:0 16px 16px">{abrir}</td></tr>'
+
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {C["linea"]};'
+            f'border-radius:8px;border-collapse:separate;border-spacing:0;margin:0 0 16px">'
+            f'<tr><td style="background:{C["cabecera"]};border-bottom:1px solid {C["linea"]};padding:14px 16px;'
+            f'border-radius:8px 8px 0 0">'
+            f'<div style="font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.06em;color:{C["suave"]}">'
+            f'UNIQ · {h(c["tipo"].upper())} · N° {c["numero"]}{h(conv.upper())}</div>'
+            f'<div style="font-size:16px;line-height:22px;font-weight:700;color:{C["navy"]};margin:4px 0 8px">'
+            f'{h(oracion(c["titulo"]))}</div>{marcas}</td></tr>{cuerpo}</table>')
+
+
+def html_fuentes(fuentes, palabras):
+    filas = ""
+    for i, (nombre, ok, detalle, cobertura) in enumerate(fuentes):
+        borde = f"border-top:1px solid {C['linea']};" if i else ""
+        estado = etiqueta("OPERATIVA", "azul") if ok else etiqueta("SIN RESPUESTA", "rojo")
+        filas += (f'<tr><td valign="top" style="{borde}padding:10px 12px;font-size:13px;line-height:19px">'
+                  f'<div style="font-weight:600;color:{C["texto"]}">{h(nombre)}</div>'
+                  f'<div style="font-size:12px;color:{C["suave"]}">{h(cobertura)}</div></td>'
+                  f'<td valign="top" align="right" style="{borde}padding:10px 12px;text-align:right">{estado}'
+                  f'<div style="font-size:12px;line-height:17px;color:{C["suave"]}">{h(detalle)}</div></td></tr>')
+    metodo = ("Una oportunidad coincide si su descripción contiene todas las palabras de la palabra clave, en "
+              "cualquier parte, sin distinguir tildes ni mayúsculas y aceptando variantes (software encuentra "
+              "softwares; académico, académica). Entre comillas, las palabras además tienen que ir juntas: "
+              "“sistema académico” encuentra “sistema de gestión académica” pero no “sistema de aire "
+              "acondicionado para servicios académicos”. NUEVO marca lo que no figuraba en el informe anterior.")
+    return (tabla([("Fuente", "left"), ("Estado", "right")], filas)
+            + f'<p style="margin:12px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">{h(metodo)} '
+              f'Palabras clave actuales: {h(", ".join(palabras) or "ninguna")} (variable PALABRAS_CLAVE del archivo .env).</p>'
+            + f'<p style="margin:8px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">Informe generado '
+              f'automáticamente a partir de datos públicos. Para cotizar en la UNIQ, '
+              f'<a href="{uniq.URL_LOGIN}" style="color:{C["enlace"]};text-decoration:none">inicia sesión</a>.</p>')
+
+
+# ------------------------------------------------------------------ informe
+
+def construir_informe(ahora, palabras, convs, grupos, fuentes):
+    """convs: cotizaciones UNIQ (None si la fuente falló). grupos: [(frase, [procesos])].
+    fuentes: [(nombre, ok, detalle, cobertura)]. Devuelve (asunto, texto, html)."""
+    todos = [x for _, items in grupos for x in items]
+    nuevos = sum(x["nuevo"] for x in todos)
+    pronto = sum(1 for x in todos if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA)
+    uniq_nuevas = [c for c in convs or [] if c["nueva"]]
+
+    asunto = (f"Informe de oportunidades – {ahora:%d/%m/%Y} · {plural(len(todos), 'coincidencia', 'coincidencias')}"
+              f" ({nuevos} nuevas)" + (f" · UNIQ: {len(convs)} activas" if convs is not None else ""))
+
+    if not palabras:
+        frase = "No hay palabras clave configuradas: define PALABRAS_CLAVE en el archivo .env."
+    elif not todos:
+        frase = "Hoy no hay procesos que coincidan con tus palabras clave."
+    else:
+        frase = (f"Hay {plural(len(todos), 'proceso que coincide', 'procesos que coinciden')} con tus palabras clave"
+                 + (f"; {plural(nuevos, 'es nuevo', 'son nuevos')}" if nuevos else "")
+                 + (f" y {plural(pronto, 'cierra', 'cierran')} en 2 días o menos" if pronto else "") + ".")
+    if convs is None:
+        frase += " La página de cotizaciones de la UNIQ no respondió hoy."
+    else:
+        frase += (f" En la UNIQ hay {plural(len(convs), 'cotización activa', 'cotizaciones activas')}"
+                  f" ({plural(len(uniq_nuevas), 'nueva', 'nuevas')}).")
+
+    cuerpo = encabezado(ahora, palabras) + aviso_fuentes(fuentes)
+    cuerpo += seccion(1, "s_resumen", "Resumen ejecutivo")
+    cuerpo += indicadores([(len(todos), "Coincidencias", False), (nuevos, "Nuevas", False),
+                           (pronto, "Por cerrar", True), (len(convs or []), "UNIQ activas", False)])
+    cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
+
+    cuerpo += seccion(2, "s_coinc", "Coincidencias por palabra clave",
+                      f"SEACE (contrataciones menores y procedimientos de los últimos {seace.DIAS_OCDS} días) "
+                      f"y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
+    cuerpo += html_coincidencias(grupos, ahora) if palabras else (
+        f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>')
+
+    cuerpo += seccion(3, "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
+    if convs is None:
+        cuerpo += f'<p style="font-size:14px;color:{C["rojo"]}">La fuente no respondió hoy.</p>'
+    elif not convs:
+        cuerpo += f'<p style="font-size:14px;color:{C["suave"]}">No hay convocatorias activas hoy.</p>'
+    else:
+        cuerpo += html_uniq(convs, ahora)
+
+    if uniq_nuevas:
+        cuerpo += seccion(4, "s_fichas", "Fichas técnicas de las cotizaciones UNIQ nuevas",
+                          "Extracto del TDR/EETT: lo necesario para decidir si cotizar.")
+        cuerpo += "".join(html_ficha(c, ahora) for c in uniq_nuevas)
+
+    cuerpo += seccion(5 if uniq_nuevas else 4, "s_fuentes", "Fuentes y método")
+    cuerpo += html_fuentes(fuentes, palabras)
+
+    return asunto, texto_informe(ahora, palabras, convs, grupos, fuentes, frase), envolver(cuerpo, "Informe de oportunidades")
+
+
+def texto_informe(ahora, palabras, convs, grupos, fuentes, frase):
+    """Versión en texto plano (clientes sin HTML y vista previa del --dry-run)."""
+    lineas = ["MONITOR DE CONTRATACIONES PÚBLICAS", "Informe diario de oportunidades",
+              f"{fecha_larga(ahora)} · emitido a las {ahora:%H:%M}",
+              f"Palabras clave: {', '.join(palabras) or 'ninguna'}", "", "1. RESUMEN EJECUTIVO", frase, "",
+              "2. COINCIDENCIAS POR PALABRA CLAVE"]
+    for frase_clave, items in grupos:
+        lineas.append(f"\n{mostrar(frase_clave)} · {plural(len(items), 'resultado', 'resultados')}")
+        previos = len(items) - len(visibles(items))
+        if previos:
+            lineas.append(f"  ({plural(previos, 'procedimiento ya informado', 'procedimientos ya informados')} no se repite)")
+        for x in visibles(items)[:MAX_FILAS]:
+            fecha, pie, _ = fecha_proceso(x, ahora)
+            lineas += [f"  {'[NUEVO] ' if x['nuevo'] else ''}{oracion(x['titulo'])}",
+                       f"    {x['fuente']} · {x['tipo']} · {detalle_proceso(x)} · {pie}: {fecha}", f"    {x['url']}"]
+    lineas += ["", "3. COTIZACIONES UNIQ ACTIVAS"]
+    if convs is None:
+        lineas.append("La fuente no respondió hoy.")
+    for c in convs or []:
+        lineas += [f"  {'[NUEVA] ' if c['nueva'] else ''}{oracion(c['titulo'])}",
+                   f"    {c['tipo']} · N° {c['numero']} · {nombre_propio(c['dependencia'])} · "
+                   f"vence {fecha_corta(c['limite'])}", f"    {c['tdr_url'] or uniq.URL_PAGINA}"]
+    nuevas = [c for c in convs or [] if c["nueva"]]
+    if nuevas:
+        lineas += ["", "4. FICHAS TÉCNICAS (UNIQ, NUEVAS)"]
+        for c in nuevas:
+            lineas += ["", "-" * 60, f"{c['tipo']} · N° {c['numero']} · {oracion(c['titulo'])}",
+                       f"Fecha límite: {fecha_corta(c['limite'])} · Dependencia: {nombre_propio(c['dependencia'])}"]
+            if c["items"]:
+                lineas += ["Ítems:"] + [f"  - {oracion(n)}: {q}" for n, q in c["items"][:MAX_ITEMS]]
+            for clave, titulo, _, _ in uniq.SECCIONES:
+                if c["secciones"].get(clave):
+                    lineas += [f"{titulo}:", c["secciones"][clave]]
+    lineas += ["", "FUENTES"] + [f"  {n}: {'operativa' if ok else 'SIN RESPUESTA'} · {d} · {cob}" for n, ok, d, cob in fuentes]
+    return "\n".join(lineas)
+
+
+def construir_alerta(detalle, ahora):
+    """Correo de falla total: ninguna fuente respondió."""
+    asunto = f"Monitor de contrataciones: no se pudo generar el informe – {ahora:%d/%m/%Y %H:%M}"
+    texto = f"No se pudo generar el informe de hoy: ninguna fuente respondió.\n\n{detalle}"
+    cuerpo = (marca("No se pudo generar el informe", ahora)
+              + f'<p style="margin:18px 0 10px;font-size:14px;line-height:22px;color:{C["cuerpo"]}">'
+                f'Ninguna de las fuentes respondió. Revisa si las páginas cambiaron o están caídas. Detalle técnico:</p>'
+              + f'<pre style="white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;'
+                f'line-height:17px;background:{C["cabecera"]};border:1px solid {C["linea"]};border-radius:6px;'
+                f'padding:12px;margin:0">{h(detalle)}</pre>')
+    return asunto, texto, envolver(cuerpo, "Error del monitor")

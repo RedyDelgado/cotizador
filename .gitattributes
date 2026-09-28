@@ -1,0 +1,2 @@
+# install.sh se ejecuta en Linux: con CRLF (clon en Windows) bash falla.
+*.sh text eol=lf
