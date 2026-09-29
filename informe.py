@@ -17,7 +17,12 @@ import uniq
 
 DIAS_ALERTA = 2   # "cierra pronto" si quedan 2 días o menos
 MAX_ITEMS = 15    # ítems del TDR por ficha
-MAX_FILAS = 15    # filas por palabra clave
+MAX_FILAS = 15    # filas por palabra clave o entidad
+# Gmail recorta el HTML arriba de ~102 KB y lo que queda abajo solo se ve con "Ver mensaje completo".
+LIMITE_HTML = 95_000   # margen para el envoltorio del correo
+CUPO_COMPLETAS = 15    # filas completas (lo nuevo) entre TODAS las palabras clave
+CUPO_BREVES = 20       # recordatorios de una línea entre todas las palabras clave
+MUY_GENERAL = 60       # desde cuántos resultados se sugiere afinar una palabra clave
 
 FUENTE = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 # Contraste WCAG sobre blanco: texto 17:1, cuerpo 10:1, suave 4.8:1, enlace 8.6:1, rojo 6.5:1.
@@ -383,29 +388,42 @@ def fila_breve(x, ahora):
             f'line-height:18px;font-weight:600;color:{C["rojo"] if urgente else C["texto"]}">{h(fecha)}</td></tr>')
 
 
-def html_grupos(grupos, ahora, titulo, vacio):
-    """Una tabla por grupo (palabra clave o entidad), ordenada por fecha de cierre."""
+def html_grupos(grupos, ahora, titulo, vacio, cupo=None, amplia=None):
+    """Una tabla por grupo (palabra clave o entidad), ordenada por fecha de cierre.
+    cupo: {"completas": n, "breves": n} compartido entre todos los grupos, para que muchas palabras
+    clave juntas no hagan que Gmail corte el correo. amplia: desde cuántos resultados se avisa que
+    la palabra clave es demasiado general."""
+    cupo = cupo if cupo is not None else {"completas": 10 ** 6, "breves": 10 ** 6}
     salida = ""
     for nombre, items in grupos:
         nuevos, pronto, resto = repartir(items, ahora)
+        n_completas = min(len(nuevos), MAX_FILAS, cupo["completas"])
+        n_breves = min(len(pronto), MAX_FILAS, cupo["breves"])
+        cupo["completas"] -= n_completas
+        cupo["breves"] -= n_breves
         filas = "".join(fila(i, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
                              detalle_proceso(x), *fecha_proceso(x, ahora), extra=enlace_bases(x))
-                        for i, x in enumerate(nuevos[:MAX_FILAS]))
-        if len(nuevos) > MAX_FILAS:
-            filas += fila_nota(f"y {len(nuevos) - MAX_FILAS} nuevos más.", seace.PORTAL_OPORTUNIDADES, "Ver en el portal")
-        if pronto:
-            filas += (f'<tr><td colspan="2" style="{"border-top:1px solid " + C["linea"] + ";" if nuevos else ""}'
+                        for i, x in enumerate(nuevos[:n_completas]))
+        if len(nuevos) > n_completas:
+            filas += fila_nota(f"y {len(nuevos) - n_completas} nuevos más.", seace.PORTAL_OPORTUNIDADES,
+                               "Ver en el portal", primera=not n_completas)
+        if n_breves:
+            filas += (f'<tr><td colspan="2" style="{"border-top:1px solid " + C["linea"] + ";" if filas else ""}'
                       f'background:{C["cabecera"]};padding:6px 12px;font-size:11px;line-height:16px;font-weight:600;'
                       f'letter-spacing:0.06em;color:{C["suave"]}">YA INFORMADOS · CIERRAN PRONTO</td></tr>')
-            filas += "".join(fila_breve(x, ahora) for x in pronto[:MAX_FILAS])
+            filas += "".join(fila_breve(x, ahora) for x in pronto[:n_breves])
+        resto += len(pronto) - n_breves
         if resto:
             filas += fila_nota(plural(resto, "proceso ya informado sigue abierto.", "procesos ya informados siguen abiertos."),
-                               seace.PORTAL_OPORTUNIDADES, "Ver en el portal", primera=not (nuevos or pronto))
+                               seace.PORTAL_OPORTUNIDADES, "Ver en el portal", primera=not filas)
+        if amplia and len(items) >= amplia:
+            filas += fila_nota(f"Esta palabra clave es muy general ({len(items)} resultados): hazla más específica "
+                               f"o ponla entre comillas junto a otra palabra.", primera=not filas)
         if not items:
             filas = fila_nota(vacio, primera=True)
         salida += subtitulo(titulo(nombre), plural(len(items), "abierto", "abiertos"))
         # Sin filas de datos, una tabla con cabecera vacía se ve rota: basta el recuadro con la nota.
-        salida += tabla([("Oportunidad", "left"), ("Cierre", "right")] if nuevos else [], filas)
+        salida += tabla([("Oportunidad", "left"), ("Cierre", "right")] if n_completas else [], filas)
     return salida
 
 
@@ -552,17 +570,8 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
                            (pronto, "Por cerrar", True), (len(convs or []), "UNIQ activas", False)])
     cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
 
-    cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
-                      "SEACE (contrataciones menores y procedimientos de selección con el registro abierto) "
-                      "y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
-    cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.") if palabras else (
-        f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>')
-
-    if seguidas:
-        cuerpo += seccion(next(numero), "s_entidades", "Entidades que sigues",
-                          "Todos sus procedimientos de selección con el registro abierto, sin filtrar por palabra clave.")
-        cuerpo += html_grupos(seguidas, ahora, nombre_propio, "Sin procedimientos con el registro abierto.")
-
+    # Primero lo corto y siempre importante (UNIQ y entidades); después lo que puede crecer mucho
+    # (coincidencias y fichas), así lo que Gmail llegara a cortar es lo menos urgente.
     cuerpo += seccion(next(numero), "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
     if convs is None:
         cuerpo += f'<p style="font-size:14px;color:{C["rojo"]}">La fuente no respondió hoy.</p>'
@@ -571,10 +580,35 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
     else:
         cuerpo += html_uniq(convs, ahora)
 
+    if seguidas:
+        cuerpo += seccion(next(numero), "s_entidades", "Entidades que sigues",
+                          "Todos sus procedimientos de selección con el registro abierto, sin filtrar por palabra clave.")
+        cuerpo += html_grupos(seguidas, ahora, nombre_propio, "Sin procedimientos con el registro abierto.")
+
+    cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
+                      "SEACE (contrataciones menores y procedimientos de selección con el registro abierto) "
+                      "y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
+    cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.",
+                          cupo={"completas": CUPO_COMPLETAS, "breves": CUPO_BREVES}, amplia=MUY_GENERAL) if palabras else (
+        f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>')
+
+    # Las fichas entran mientras el correo no pase del límite de Gmail; las demás quedan enlazadas
+    # desde la tabla de cotizaciones UNIQ (cada fila abre su TDR/EETT).
+    reserva = len((seccion(9, "s_fuentes", "Fuentes") + html_fuentes(fuentes)).encode())
+    fichas, omitidas = "", 0
+    for c in uniq_nuevas:
+        ficha = html_ficha(c, ahora)
+        if len((cuerpo + fichas + ficha).encode()) + reserva > LIMITE_HTML:
+            omitidas += 1
+        else:
+            fichas += ficha
     if uniq_nuevas:
         cuerpo += seccion(next(numero), "s_fichas", "Fichas técnicas de las cotizaciones UNIQ nuevas",
-                          "Extracto del TDR/EETT: lo necesario para decidir si cotizar.")
-        cuerpo += "".join(html_ficha(c, ahora) for c in uniq_nuevas)
+                          "Extracto del TDR/EETT: lo necesario para decidir si cotizar.") + fichas
+        if omitidas:
+            cuerpo += (f'<p style="margin:0 0 12px;font-size:13px;line-height:19px;color:{C["suave"]}">'
+                       f'{plural(omitidas, "ficha más no entró", "fichas más no entraron")} en este correo para que Gmail '
+                       f'no lo corte: su TDR/EETT está enlazado en la tabla de cotizaciones UNIQ.</p>')
 
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
@@ -609,17 +643,16 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=()):
               f"Palabras clave: {', '.join(palabras) or 'ninguna'}"]
     if seguidas:
         lineas.append(f"Entidades: {', '.join(nombre_propio(e) for e, _ in seguidas)}")
-    lineas += ["", f"{next(numero)}. RESUMEN EJECUTIVO", frase, "", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"]
-    lineas += texto_grupos(grupos, ahora, mostrar)
-    if seguidas:
-        lineas += ["", f"{next(numero)}. ENTIDADES QUE SIGUES"] + texto_grupos(seguidas, ahora, nombre_propio)
-    lineas += ["", f"{next(numero)}. COTIZACIONES UNIQ ACTIVAS"]
+    lineas += ["", f"{next(numero)}. RESUMEN EJECUTIVO", frase, "", f"{next(numero)}. COTIZACIONES UNIQ ACTIVAS"]
     if convs is None:
         lineas.append("La fuente no respondió hoy.")
     for c in convs or []:
         lineas += [f"  {'[NUEVA] ' if c['nueva'] else ''}{oracion(c['titulo'])}",
                    f"    {c['tipo']} · N° {c['numero']} · {nombre_propio(c['dependencia'])} · "
                    f"vence {fecha_corta(c['limite'])}", f"    {c['tdr_url'] or uniq.URL_PAGINA}"]
+    if seguidas:
+        lineas += ["", f"{next(numero)}. ENTIDADES QUE SIGUES"] + texto_grupos(seguidas, ahora, nombre_propio)
+    lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar)
     nuevas = [c for c in convs or [] if c["nueva"]]
     if nuevas:
         lineas += ["", f"{next(numero)}. FICHAS TÉCNICAS (UNIQ, NUEVAS)"]
