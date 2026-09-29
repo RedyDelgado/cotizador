@@ -74,6 +74,17 @@ def sesion():
 
 
 def error_corto(e):
+    """El error en palabras simples para la tabla de fuentes del informe (el detalle técnico va al log)."""
+    if isinstance(e, requests.HTTPError) and e.response is not None:
+        if e.response.status_code == 403:
+            return "El portal rechaza las conexiones desde este servidor (HTTP 403)"
+        return f"El portal respondió con error HTTP {e.response.status_code}"
+    if isinstance(e, requests.exceptions.RetryError):
+        return "El portal respondió con errores en todos los reintentos"
+    if isinstance(e, requests.Timeout):
+        return "El portal no respondió a tiempo"
+    if isinstance(e, requests.ConnectionError):
+        return "No se pudo conectar con el portal"
     return f"{type(e).__name__}: {str(e)[:140]}"
 
 
