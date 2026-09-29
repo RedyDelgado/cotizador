@@ -20,7 +20,7 @@ Fuentes, todas públicas y sin login:
 |---|---|---|
 | UNIQ · [Cotizaciones en línea](https://cotizaciones.uniq.edu.pe/cotizaciones/ver_cotizaciones) | todas las cotizaciones activas y su TDR/EETT | tiempo real |
 | SEACE · [Contrataciones menores](https://prod6.seace.gob.pe/buscador-publico/contrataciones) | hasta 8 UIT, cotización abierta o por abrir | tiempo real |
-| OECE · [Contrataciones Abiertas](https://contratacionesabiertas.oece.gob.pe) | licitaciones, subastas, concursos y adjudicaciones de los últimos 30 días | ~2 días de desfase |
+| OECE · [Contrataciones Abiertas](https://contratacionesabiertas.oece.gob.pe) | licitaciones, subastas, concursos y adjudicaciones de los últimos 30 días | 3 a 4 días de retraso |
 
 El buscador clásico de SEACE 3.0 tiene reCAPTCHA, así que no se usa.
 

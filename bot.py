@@ -139,7 +139,7 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
     """[(frase, [procesos])] de todas las fuentes. Un proceso que calza con dos frases sale en la primera."""
     vistos = set(estado.get("seace", []))
     busquedas = [("menores", "SEACE · Contrataciones menores", "Tiempo real · hasta 8 UIT", seace.menores),
-                 ("ocds", "OECE · Contrataciones Abiertas", f"~2 días de desfase · últimos {seace.DIAS_OCDS} días",
+                 ("ocds", "OECE · Contrataciones Abiertas", f"3 a 4 días de retraso · últimos {seace.DIAS_OCDS} días",
                   seace.procedimientos)]
     errores, cuenta, grupos, listados = {}, {"menores": 0, "ocds": 0}, [], set()
     for frase in palabras:

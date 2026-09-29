@@ -2,7 +2,7 @@
 
 - Contrataciones menores (hasta 8 UIT): buscador público de prod6.seace.gob.pe, en tiempo real.
 - Procedimientos de selección (licitaciones, subastas, adjudicaciones...): API de Contrataciones
-  Abiertas del OECE (estándar OCDS), que llega con ~2 días de desfase.
+  Abiertas del OECE (estándar OCDS), que llega con 3 a 4 días de retraso.
 El buscador clásico de SEACE 3.0 (prod2) está protegido con reCAPTCHA: no se usa.
 
 Cómo se busca una frase como "sistema de seguridad ciudadana":
