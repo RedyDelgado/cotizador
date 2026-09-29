@@ -476,7 +476,7 @@ def html_ficha(c, ahora):
             f'{h(oracion(c["titulo"]))}</div>{marcas}</td></tr>{cuerpo}</table>')
 
 
-def html_fuentes(fuentes, palabras):
+def html_fuentes(fuentes):
     filas = ""
     for i, (nombre, ok, detalle, cobertura) in enumerate(fuentes):
         borde = f"border-top:1px solid {C['linea']};" if i else ""
@@ -486,17 +486,7 @@ def html_fuentes(fuentes, palabras):
                   f'<div style="font-size:12px;color:{C["suave"]}">{h(cobertura)}</div></td>'
                   f'<td valign="top" align="right" style="{borde}padding:10px 12px;text-align:right">{estado}'
                   f'<div style="font-size:12px;line-height:17px;color:{C["suave"]}">{h(detalle)}</div></td></tr>')
-    metodo = ("Una oportunidad coincide si su descripción contiene todas las palabras de la palabra clave, en "
-              "cualquier parte, sin distinguir tildes ni mayúsculas y aceptando variantes (software encuentra "
-              "softwares; académico, académica). Entre comillas, las palabras además tienen que ir juntas: "
-              "“sistema académico” encuentra “sistema de gestión académica” pero no “sistema de aire "
-              "acondicionado para servicios académicos”. NUEVO marca lo que no figuraba en el informe anterior.")
-    return (tabla([("Fuente", "left"), ("Estado", "right")], filas)
-            + f'<p style="margin:12px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">{h(metodo)} '
-              f'Palabras clave actuales: {h(", ".join(palabras) or "ninguna")} (variable PALABRAS_CLAVE del archivo .env).</p>'
-            + f'<p style="margin:8px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">Informe generado '
-              f'automáticamente a partir de datos públicos. Para cotizar en la UNIQ, '
-              f'<a href="{uniq.URL_LOGIN}" style="color:{C["enlace"]};text-decoration:none">inicia sesión</a>.</p>')
+    return tabla([("Fuente", "left"), ("Estado", "right")], filas)
 
 
 # ------------------------------------------------------------------ informe
@@ -551,8 +541,8 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes):
                           "Extracto del TDR/EETT: lo necesario para decidir si cotizar.")
         cuerpo += "".join(html_ficha(c, ahora) for c in uniq_nuevas)
 
-    cuerpo += seccion(5 if uniq_nuevas else 4, "s_fuentes", "Fuentes y método")
-    cuerpo += html_fuentes(fuentes, palabras)
+    cuerpo += seccion(5 if uniq_nuevas else 4, "s_fuentes", "Fuentes")
+    cuerpo += html_fuentes(fuentes)
 
     return asunto, texto_informe(ahora, palabras, convs, grupos, fuentes, frase), envolver(cuerpo, "Informe de oportunidades")
 

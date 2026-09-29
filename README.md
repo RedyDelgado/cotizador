@@ -12,7 +12,7 @@ Todos los días a las 07:00 (hora de Lima) envía **un informe** por correo, con
 4. **Fichas técnicas** de las cotizaciones UNIQ nuevas: datos del sistema y el extracto del
    **TDR/EETT** para decidir si cotizar (ítems y cantidades, objetivo, **requisitos del proveedor**,
    plazo y lugar, pago, adelantos, garantías, penalidades y características técnicas).
-5. **Fuentes y método**: estado de cada fuente y cómo se calculan las coincidencias.
+5. **Fuentes**: estado de cada fuente.
 
 Fuentes, todas públicas y sin login:
 
