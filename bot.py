@@ -221,7 +221,8 @@ def enviar(asunto, texto, cuerpo_html):
 
     with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
         smtp.starttls()
-        smtp.login(usuario, os.environ["SMTP_PASS"].replace(" ", ""))  # Google la muestra con espacios
+        # Google la muestra con espacios y, al copiarla, a veces vienen espacios no separables: fuera todos.
+        smtp.login(usuario, "".join(os.environ["SMTP_PASS"].split()))
         smtp.send_message(msg)
     log.info("Correo enviado a %s: %s", ", ".join(destinos), asunto)
 
