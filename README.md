@@ -5,22 +5,25 @@ Todos los días a las 07:00 (hora de Lima) envía **un informe** por correo, con
 1. **Resumen ejecutivo**: coincidencias, nuevas, por cerrar (2 días o menos) y cotizaciones UNIQ
    activas, más una frase que lo resume.
 2. **Coincidencias por palabra clave**: una tabla por cada palabra clave con los procesos de todas
-   las fuentes, ordenados por fecha de cierre, con etiquetas NUEVO / CIERRA PRONTO / fuente y el
-   enlace a la ficha oficial. Los procedimientos ya informados otros días se resumen en una línea.
-3. **Cotizaciones UNIQ activas**: todas, por fecha límite, marcando las que coinciden con tus
+   las fuentes, ordenados por fecha de cierre, con etiquetas NUEVO / CIERRA PRONTO / fuente, el
+   enlace a la ficha oficial y a las bases. Lo nuevo sale completo; lo ya informado, solo como
+   recordatorio en una línea cuando está por cerrar.
+3. **Entidades que sigues** (si defines `ENTIDADES`): todos sus procedimientos con el registro
+   abierto, sin filtrar por palabra clave.
+4. **Cotizaciones UNIQ activas**: todas, por fecha límite, marcando las que coinciden con tus
    palabras clave.
-4. **Fichas técnicas** de las cotizaciones UNIQ nuevas: datos del sistema y el extracto del
+5. **Fichas técnicas** de las cotizaciones UNIQ nuevas: datos del sistema y el extracto del
    **TDR/EETT** para decidir si cotizar (ítems y cantidades, objetivo, **requisitos del proveedor**,
    plazo y lugar, pago, adelantos, garantías, penalidades y características técnicas).
-5. **Fuentes**: estado de cada fuente.
+6. **Fuentes**: estado de cada fuente.
 
-Fuentes, todas públicas y sin login:
+Fuentes, todas públicas, oficiales y sin login ni captcha:
 
 | Fuente | Qué trae | Actualización |
 |---|---|---|
 | UNIQ · [Cotizaciones en línea](https://cotizaciones.uniq.edu.pe/cotizaciones/ver_cotizaciones) | todas las cotizaciones activas y su TDR/EETT | tiempo real |
 | SEACE · [Contrataciones menores](https://prod6.seace.gob.pe/buscador-publico/contrataciones) | hasta 8 UIT, cotización abierta o por abrir | tiempo real |
-| OECE · [Contrataciones Abiertas](https://contratacionesabiertas.oece.gob.pe) | licitaciones, subastas, concursos y adjudicaciones de los últimos 30 días | 3 a 4 días de retraso |
+| SEACE · [Oportunidades de Negocio](https://prod4.seace.gob.pe/openegocio/) | licitaciones, concursos, subastas y comparación de precios con el **registro de participantes abierto**, con cronograma y bases | lo que está abierto hoy |
 
 El buscador clásico de SEACE 3.0 tiene reCAPTCHA, así que no se usa.
 
@@ -51,16 +54,27 @@ distinguen y el bot busca las dos versiones ("maíz" y "maiz"). Si una palabra c
 que no sirven, ponla entre comillas o hazla más específica. Un proceso que calza con dos palabras
 clave sale solo en la primera.
 
+## Entidades que sigues
+
+Para ver todo lo que publica una entidad, sin depender de palabras clave:
+
+```
+ENTIDADES=MUNICIPALIDAD PROVINCIAL DE LA CONVENCION
+```
+
+Basta una parte del nombre, tal como aparece en el SEACE; no importan tildes ni mayúsculas. Varias
+entidades van separadas por coma.
+
 ## Archivos
 
 | | |
 |---|---|
 | `bot.py` | orquesta: lee las fuentes, arma el informe y lo envía |
 | `uniq.py` | cotizaciones UNIQ y lectura del TDR/EETT |
-| `seace.py` | búsquedas en SEACE y OECE, y la regla de coincidencia |
+| `seace.py` | búsquedas en SEACE (contrataciones menores y Oportunidades de Negocio) y la regla de coincidencia |
 | `informe.py` | diseño del correo (HTML y texto) |
 | `test_bot.py` | autoprueba sin red: `python test_bot.py` |
-| `.env` | credenciales y palabras clave (a partir de `.env.example`); permisos 600, **no se versiona** |
+| `.env` | credenciales, palabras clave y entidades (a partir de `.env.example`); permisos 600, **no se versiona** |
 | `data/estado.json` | lo que salió en el informe anterior, para marcar lo nuevo |
 | `logs/bot.log` | log con rotación (1 MB × 3); `logs/cron.err` solo si Python se cae |
 

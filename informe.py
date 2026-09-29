@@ -10,8 +10,6 @@ import base64
 import functools
 import html
 import re
-from urllib.parse import quote
-
 import pymupdf
 
 import seace
@@ -48,6 +46,7 @@ GLIFOS = {
     "landmark": '<line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/>',
     "file-text": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
     "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+    "building-2": '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
     "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>',
     "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
     "target": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
@@ -64,6 +63,7 @@ GLIFOS = {
 ICONOS = {
     "s_resumen": ("chart-column", C["navy"]),
     "s_coinc": ("search", C["navy"]),
+    "s_entidades": ("building-2", C["navy"]),
     "s_uniq": ("landmark", C["navy"]),
     "s_fichas": ("file-text", C["navy"]),
     "s_fuentes": ("database", C["navy"]),
@@ -241,7 +241,7 @@ def tabla(cabeceras, filas):
             + (f'<tr>{th}</tr>' if th else "") + f'{filas}</table>')
 
 
-def fila(i, titulo, url, etiquetas, detalle, fecha, pie_fecha, urgente=False):
+def fila(i, titulo, url, etiquetas, detalle, fecha, pie_fecha, urgente=False, extra=""):
     """Fila de oportunidad: título (enlace), etiquetas y detalle; a la derecha la fecha."""
     borde = f"border-top:1px solid {C['linea']};" if i else ""
     enlace = (f'<a href="{h(url)}" style="color:{C["texto"]};text-decoration:none">{h(titulo)}</a>' if url else h(titulo))
@@ -249,7 +249,7 @@ def fila(i, titulo, url, etiquetas, detalle, fecha, pie_fecha, urgente=False):
     return (f'<tr><td valign="top" style="{borde}padding:12px">'
             f'<div style="font-size:14px;line-height:20px;font-weight:600;color:{C["texto"]}">{enlace}</div>'
             f'<div style="margin-top:6px">{etiquetas}</div>'
-            f'<div style="font-size:12px;line-height:18px;color:{C["suave"]}">{h(detalle)}</div></td>'
+            f'<div style="font-size:12px;line-height:18px;color:{C["suave"]}">{h(detalle)}</div>{extra}</td>'
             f'<td valign="top" align="right" style="{borde}padding:12px;white-space:nowrap;text-align:right">'
             f'<div style="font-size:13px;line-height:20px;font-weight:600;color:{color}">{h(fecha)}</div>'
             f'<div style="font-size:11px;line-height:16px;color:{C["suave"]}">{h(pie_fecha)}</div></td></tr>')
@@ -298,13 +298,16 @@ def marca(titulo, ahora):
             f'{h(fecha_larga(ahora))} · Emitido a las {ahora:%H:%M} (hora de Lima)</div>')
 
 
-def encabezado(ahora, palabras):
+def encabezado(ahora, palabras, entidades):
     chips = "".join(etiqueta(mostrar(p) if seace.es_exacta(p) else p, "contorno") for p in palabras) or (
         f'<span style="font-size:13px;color:{C["suave"]}">ninguna (define PALABRAS_CLAVE en .env)</span>')
+    filas = [("Palabras clave:", chips)]
+    if entidades:
+        filas.append(("Entidades:", "".join(etiqueta(nombre_propio(e), "gris") for e in entidades)))
+    celdas = "".join(f'<tr><td valign="top" style="padding:1px 8px 0 0;font-size:12px;line-height:18px;font-weight:600;'
+                     f'color:{C["cuerpo"]};white-space:nowrap">{rotulo}</td><td>{valor}</td></tr>' for rotulo, valor in filas)
     return (marca("Informe diario de oportunidades", ahora) +
-            f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px"><tr>'
-            f'<td valign="top" style="padding:1px 8px 0 0;font-size:12px;line-height:18px;font-weight:600;color:{C["cuerpo"]};'
-            f'white-space:nowrap">Palabras clave:</td><td>{chips}</td></tr></table>')
+            f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px">{celdas}</table>')
 
 
 def aviso_fuentes(fuentes):
@@ -338,8 +341,8 @@ def fecha_proceso(x, ahora):
     """(fecha, texto de abajo, urgente) para la columna derecha de un proceso."""
     if x["cierre"]:
         if not x["abierta"]:
-            return dia_mes(x["inicio"]), "abre la cotización", False
-        return cuando(x["cierre"], ahora), "cierre", dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA
+            return dia_mes(x["inicio"]), "abre el registro" if x.get("pie_cierre") else "abre la cotización", False
+        return cuando(x["cierre"], ahora), x.get("pie_cierre", "cierre"), dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA
     return dia_mes(x["convocatoria"]), "convocatoria", False
 
 
@@ -355,32 +358,54 @@ def detalle_proceso(x):
                                     f'S/ {x["monto"]:,.0f}' if x["monto"] else ""]))
 
 
-def visibles(items):
-    """Lo que se lista: lo nuevo y todo lo que aún se puede cotizar. Los procedimientos ya informados
-    (siguen 30 días en la ventana) quedan en una línea: repetirlos a diario solo sería ruido."""
-    return [x for x in items if x["nuevo"] or x["cierre"]]
+def enlace_bases(x):
+    if not x.get("bases"):
+        return ""
+    return (f'<div style="margin-top:4px;font-size:12px;line-height:18px"><a href="{h(x["bases"])}" '
+            f'style="color:{C["enlace"]};text-decoration:none;font-weight:600">Descargar bases</a></div>')
 
 
-def html_coincidencias(grupos, ahora):
-    cabeceras = [("Oportunidad", "left"), ("Fecha", "right")]
+def repartir(items, ahora):
+    """(nuevos, recordatorios, resto). Un proceso queda abierto una o dos semanas: se lista completo el día
+    que aparece; después solo se recuerda, en una línea, cuando está por cerrar; el resto se cuenta."""
+    nuevos = [x for x in items if x["nuevo"]]
+    pronto = [x for x in items if not x["nuevo"] and x["cierre"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA]
+    return nuevos, pronto, len(items) - len(nuevos) - len(pronto)
+
+
+def fila_breve(x, ahora):
+    """Recordatorio de un proceso ya informado: título enlazado y fecha de cierre."""
+    fecha, _, urgente = fecha_proceso(x, ahora)
+    borde = f"border-top:1px solid {C['linea']}"
+    return (f'<tr><td style="{borde};padding:8px 12px;font-size:13px;line-height:18px">'
+            f'<a href="{h(x["url"])}" style="color:{C["texto"]};text-decoration:none">{h(recortar(oracion(x["titulo"]), 90))}</a></td>'
+            f'<td align="right" style="{borde};padding:8px 12px;white-space:nowrap;text-align:right;font-size:13px;'
+            f'line-height:18px;font-weight:600;color:{C["rojo"] if urgente else C["texto"]}">{h(fecha)}</td></tr>')
+
+
+def html_grupos(grupos, ahora, titulo, vacio):
+    """Una tabla por grupo (palabra clave o entidad), ordenada por fecha de cierre."""
     salida = ""
-    for frase, items in grupos:
-        lista = visibles(items)
-        previos = len(items) - len(lista)
-        busqueda = seace.BUSQUEDA_OCDS.format(quote(frase.strip('"')))
+    for nombre, items in grupos:
+        nuevos, pronto, resto = repartir(items, ahora)
         filas = "".join(fila(i, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
-                             detalle_proceso(x), *fecha_proceso(x, ahora))
-                        for i, x in enumerate(lista[:MAX_FILAS]))
-        if len(lista) > MAX_FILAS:
-            filas += fila_nota(f"y {len(lista) - MAX_FILAS} más.", busqueda, "Ver todos en el portal")
-        if previos:
-            filas += fila_nota(f"{plural(previos, 'procedimiento ya informado sigue', 'procedimientos ya informados siguen')}"
-                               f" en la ventana de {seace.DIAS_OCDS} días.", busqueda, "Ver en el portal", primera=not lista)
+                             detalle_proceso(x), *fecha_proceso(x, ahora), extra=enlace_bases(x))
+                        for i, x in enumerate(nuevos[:MAX_FILAS]))
+        if len(nuevos) > MAX_FILAS:
+            filas += fila_nota(f"y {len(nuevos) - MAX_FILAS} nuevos más.", seace.PORTAL_OPORTUNIDADES, "Ver en el portal")
+        if pronto:
+            filas += (f'<tr><td colspan="2" style="{"border-top:1px solid " + C["linea"] + ";" if nuevos else ""}'
+                      f'background:{C["cabecera"]};padding:6px 12px;font-size:11px;line-height:16px;font-weight:600;'
+                      f'letter-spacing:0.06em;color:{C["suave"]}">YA INFORMADOS · CIERRAN PRONTO</td></tr>')
+            filas += "".join(fila_breve(x, ahora) for x in pronto[:MAX_FILAS])
+        if resto:
+            filas += fila_nota(plural(resto, "proceso ya informado sigue abierto.", "procesos ya informados siguen abiertos."),
+                               seace.PORTAL_OPORTUNIDADES, "Ver en el portal", primera=not (nuevos or pronto))
         if not items:
-            filas = fila_nota("Sin coincidencias en este momento.", primera=True)
-        salida += subtitulo(mostrar(frase), plural(len(items), "resultado", "resultados"), busqueda, "Buscar en el portal")
+            filas = fila_nota(vacio, primera=True)
+        salida += subtitulo(titulo(nombre), plural(len(items), "abierto", "abiertos"))
         # Sin filas de datos, una tabla con cabecera vacía se ve rota: basta el recuadro con la nota.
-        salida += tabla(cabeceras if lista else [], filas)
+        salida += tabla([("Oportunidad", "left"), ("Cierre", "right")] if nuevos else [], filas)
     return salida
 
 
@@ -491,9 +516,10 @@ def html_fuentes(fuentes):
 
 # ------------------------------------------------------------------ informe
 
-def construir_informe(ahora, palabras, convs, grupos, fuentes):
+def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
     """convs: cotizaciones UNIQ (None si la fuente falló). grupos: [(frase, [procesos])].
-    fuentes: [(nombre, ok, detalle, cobertura)]. Devuelve (asunto, texto, html)."""
+    fuentes: [(nombre, ok, detalle, cobertura)]. seguidas: [(entidad, [procesos])].
+    Devuelve (asunto, texto, html)."""
     todos = [x for _, items in grupos for x in items]
     nuevos = sum(x["nuevo"] for x in todos)
     pronto = sum(1 for x in todos if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA)
@@ -510,25 +536,34 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes):
         frase = (f"Hay {plural(len(todos), 'proceso que coincide', 'procesos que coinciden')} con tus palabras clave"
                  + (f"; {plural(nuevos, 'es nuevo', 'son nuevos')}" if nuevos else "")
                  + (f" y {plural(pronto, 'cierra', 'cierran')} en 2 días o menos" if pronto else "") + ".")
+    for entidad, items in seguidas:
+        frase += (f" {nombre_propio(entidad)} tiene "
+                  f"{plural(len(items), 'procedimiento con registro abierto', 'procedimientos con registro abierto')}.")
     if convs is None:
         frase += " La página de cotizaciones de la UNIQ no respondió hoy."
     else:
         frase += (f" En la UNIQ hay {plural(len(convs), 'cotización activa', 'cotizaciones activas')}"
                   f" ({plural(len(uniq_nuevas), 'nueva', 'nuevas')}).")
 
-    cuerpo = encabezado(ahora, palabras) + aviso_fuentes(fuentes)
-    cuerpo += seccion(1, "s_resumen", "Resumen ejecutivo")
+    numero = iter(range(1, 10))  # las secciones opcionales no dejan huecos en la numeración
+    cuerpo = encabezado(ahora, palabras, [e for e, _ in seguidas]) + aviso_fuentes(fuentes)
+    cuerpo += seccion(next(numero), "s_resumen", "Resumen ejecutivo")
     cuerpo += indicadores([(len(todos), "Coincidencias", False), (nuevos, "Nuevas", False),
                            (pronto, "Por cerrar", True), (len(convs or []), "UNIQ activas", False)])
     cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
 
-    cuerpo += seccion(2, "s_coinc", "Coincidencias por palabra clave",
-                      f"SEACE (contrataciones menores y procedimientos de los últimos {seace.DIAS_OCDS} días) "
-                      f"y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
-    cuerpo += html_coincidencias(grupos, ahora) if palabras else (
+    cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
+                      "SEACE (contrataciones menores y procedimientos de selección con el registro abierto) "
+                      "y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
+    cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.") if palabras else (
         f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>')
 
-    cuerpo += seccion(3, "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
+    if seguidas:
+        cuerpo += seccion(next(numero), "s_entidades", "Entidades que sigues",
+                          "Todos sus procedimientos de selección con el registro abierto, sin filtrar por palabra clave.")
+        cuerpo += html_grupos(seguidas, ahora, nombre_propio, "Sin procedimientos con el registro abierto.")
+
+    cuerpo += seccion(next(numero), "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
     if convs is None:
         cuerpo += f'<p style="font-size:14px;color:{C["rojo"]}">La fuente no respondió hoy.</p>'
     elif not convs:
@@ -537,32 +572,48 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes):
         cuerpo += html_uniq(convs, ahora)
 
     if uniq_nuevas:
-        cuerpo += seccion(4, "s_fichas", "Fichas técnicas de las cotizaciones UNIQ nuevas",
+        cuerpo += seccion(next(numero), "s_fichas", "Fichas técnicas de las cotizaciones UNIQ nuevas",
                           "Extracto del TDR/EETT: lo necesario para decidir si cotizar.")
         cuerpo += "".join(html_ficha(c, ahora) for c in uniq_nuevas)
 
-    cuerpo += seccion(5 if uniq_nuevas else 4, "s_fuentes", "Fuentes")
+    cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
 
-    return asunto, texto_informe(ahora, palabras, convs, grupos, fuentes, frase), envolver(cuerpo, "Informe de oportunidades")
+    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas)
+    return asunto, texto, envolver(cuerpo, "Informe de oportunidades")
 
 
-def texto_informe(ahora, palabras, convs, grupos, fuentes, frase):
-    """Versión en texto plano (clientes sin HTML y vista previa del --dry-run)."""
-    lineas = ["MONITOR DE CONTRATACIONES PÚBLICAS", "Informe diario de oportunidades",
-              f"{fecha_larga(ahora)} · emitido a las {ahora:%H:%M}",
-              f"Palabras clave: {', '.join(palabras) or 'ninguna'}", "", "1. RESUMEN EJECUTIVO", frase, "",
-              "2. COINCIDENCIAS POR PALABRA CLAVE"]
-    for frase_clave, items in grupos:
-        lineas.append(f"\n{mostrar(frase_clave)} · {plural(len(items), 'resultado', 'resultados')}")
-        previos = len(items) - len(visibles(items))
-        if previos:
-            lineas.append(f"  ({plural(previos, 'procedimiento ya informado', 'procedimientos ya informados')} no se repite)")
-        for x in visibles(items)[:MAX_FILAS]:
+def texto_grupos(grupos, ahora, titulo):
+    lineas = []
+    for nombre, items in grupos:
+        lineas.append(f"\n{titulo(nombre)} · {plural(len(items), 'abierto', 'abiertos')}")
+        nuevos, pronto, resto = repartir(items, ahora)
+        for x in pronto[:MAX_FILAS]:
+            lineas.append(f"  [YA INFORMADO, CIERRA {fecha_proceso(x, ahora)[0].upper()}] {recortar(oracion(x['titulo']), 90)}")
+        if resto:
+            lineas.append(f"  ({plural(resto, 'proceso ya informado sigue abierto', 'procesos ya informados siguen abiertos')})")
+        for x in nuevos[:MAX_FILAS]:
             fecha, pie, _ = fecha_proceso(x, ahora)
             lineas += [f"  {'[NUEVO] ' if x['nuevo'] else ''}{oracion(x['titulo'])}",
                        f"    {x['fuente']} · {x['tipo']} · {detalle_proceso(x)} · {pie}: {fecha}", f"    {x['url']}"]
-    lineas += ["", "3. COTIZACIONES UNIQ ACTIVAS"]
+            if x.get("bases"):
+                lineas.append(f"    Bases: {x['bases']}")
+    return lineas
+
+
+def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=()):
+    """Versión en texto plano (clientes sin HTML y vista previa del --dry-run)."""
+    numero = iter(range(1, 10))
+    lineas = ["MONITOR DE CONTRATACIONES PÚBLICAS", "Informe diario de oportunidades",
+              f"{fecha_larga(ahora)} · emitido a las {ahora:%H:%M}",
+              f"Palabras clave: {', '.join(palabras) or 'ninguna'}"]
+    if seguidas:
+        lineas.append(f"Entidades: {', '.join(nombre_propio(e) for e, _ in seguidas)}")
+    lineas += ["", f"{next(numero)}. RESUMEN EJECUTIVO", frase, "", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"]
+    lineas += texto_grupos(grupos, ahora, mostrar)
+    if seguidas:
+        lineas += ["", f"{next(numero)}. ENTIDADES QUE SIGUES"] + texto_grupos(seguidas, ahora, nombre_propio)
+    lineas += ["", f"{next(numero)}. COTIZACIONES UNIQ ACTIVAS"]
     if convs is None:
         lineas.append("La fuente no respondió hoy.")
     for c in convs or []:
@@ -571,7 +622,7 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase):
                    f"vence {fecha_corta(c['limite'])}", f"    {c['tdr_url'] or uniq.URL_PAGINA}"]
     nuevas = [c for c in convs or [] if c["nueva"]]
     if nuevas:
-        lineas += ["", "4. FICHAS TÉCNICAS (UNIQ, NUEVAS)"]
+        lineas += ["", f"{next(numero)}. FICHAS TÉCNICAS (UNIQ, NUEVAS)"]
         for c in nuevas:
             lineas += ["", "-" * 60, f"{c['tipo']} · N° {c['numero']} · {oracion(c['titulo'])}",
                        f"Fecha límite: {fecha_corta(c['limite'])} · Dependencia: {nombre_propio(c['dependencia'])}"]

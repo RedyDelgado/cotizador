@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Monitor de contrataciones públicas: un informe diario por correo.
 
-Junta tres fuentes públicas en un solo informe:
+Junta fuentes públicas en un solo informe:
 - UNIQ: cotizaciones activas con el extracto de su TDR/EETT (uniq.py);
 - SEACE: contrataciones menores y procedimientos de selección que coinciden con tus
-  palabras clave, PALABRAS_CLAVE en .env (seace.py).
+  palabras clave (PALABRAS_CLAVE en .env), y todo lo abierto de las entidades que sigues
+  (ENTIDADES en .env) (seace.py).
 El diseño del correo está en informe.py.
 """
 import argparse
@@ -139,9 +140,9 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
     """[(frase, [procesos])] de todas las fuentes. Un proceso que calza con dos frases sale en la primera."""
     vistos = set(estado.get("seace", []))
     busquedas = [("menores", "SEACE · Contrataciones menores", "Tiempo real · hasta 8 UIT", seace.menores),
-                 ("ocds", "OECE · Contrataciones Abiertas", f"3 a 4 días de retraso · últimos {seace.DIAS_OCDS} días",
+                 ("oportunidades", "SEACE · Oportunidades de Negocio", "Procedimientos con registro abierto",
                   seace.procedimientos)]
-    errores, cuenta, grupos, listados = {}, {"menores": 0, "ocds": 0}, [], set()
+    errores, cuenta, grupos, listados = {}, {"menores": 0, "oportunidades": 0}, [], set()
     for frase in palabras:
         items = []
         for clave, _, _, buscar in busquedas:
@@ -173,6 +174,29 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
     log.info("Coincidencias: %s", {f: len(i) for f, i in grupos})
     seace_ids = {x["id"] for _, items in grupos for x in items if x["fuente"] == "SEACE"}
     return grupos, seace_ids, bool(errores)
+
+
+def buscar_entidades(s, ahora, entidades, estado, fuentes):
+    """[(entidad, [procesos])]: todo lo abierto de las entidades que sigues, sin filtrar por palabra clave."""
+    if not entidades:
+        return [], set(), False
+    vistos = set(estado.get("seace", []))
+    try:
+        por_entidad = seace.procedimientos_de_entidades(s, entidades, ahora)
+    except Exception as e:
+        log.exception("Falló la búsqueda de entidades")
+        fuentes.append(("SEACE · Entidades que sigues", False, error_corto(e), "Procedimientos con registro abierto"))
+        return [], set(), True
+    grupos = []
+    for entidad in entidades:
+        items = sorted(por_entidad[entidad], key=lambda x: x["cierre"])
+        for x in items:
+            x["nuevo"] = x["id"] not in vistos
+        grupos.append((entidad, items))
+    total = sum(len(i) for _, i in grupos)
+    fuentes.append(("SEACE · Entidades que sigues", True, f"{total} procedimientos abiertos", "Procedimientos con registro abierto"))
+    log.info("Entidades: %s", {e: len(i) for e, i in grupos})
+    return grupos, {x["id"] for _, items in grupos for x in items}, False
 
 
 # --------------------------------------------------------------------- envío
@@ -215,6 +239,7 @@ def main():
     sin_envio = args.dry_run or args.html_preview
     ahora = datetime.now(uniq.LIMA)
     palabras = [x.strip() for x in os.environ.get("PALABRAS_CLAVE", "").split(",") if x.strip()]
+    entidades = [x.strip() for x in os.environ.get("ENTIDADES", "").split(",") if x.strip()]
 
     try:
         estado = cargar_estado()
@@ -222,11 +247,14 @@ def main():
         fuentes = []
         convs = leer_uniq(s, ahora, estado, fuentes)
         grupos, seace_ids, seace_fallo = buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes)
+        seguidas, ids_entidades, entidades_fallo = buscar_entidades(s, ahora, entidades, estado, fuentes)
+        seace_ids |= ids_entidades
+        seace_fallo = seace_fallo or entidades_fallo
 
         if all(not ok for _, ok, _, _ in fuentes):
             raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
 
-        asunto, texto, cuerpo = informe.construir_informe(ahora, palabras, convs, grupos, fuentes)
+        asunto, texto, cuerpo = informe.construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas)
         if args.html_preview:
             (DIR / "preview.html").write_text(informe.con_data_uri(cuerpo), "utf-8")
             print(f"HTML guardado en {DIR / 'preview.html'}")

@@ -60,4 +60,17 @@ assert seace.consulta('"sistema académico"') == ["académic", "academic"]
 assert seace.consulta("sistema de seguridad ciudadana") == ["seguridad"]
 assert seace.consulta("maíz") == ["maíz", "maiz"] and seace.consulta("sistema académico") == ["académic", "academic"]
 assert seace.limpio("PROYECTO  ¿ESTADIO¿ DV CAJABAMBA ¿ HUAMACHUCO") == 'PROYECTO "ESTADIO" DV CAJABAMBA – HUAMACHUCO'
+# Oportunidades de Negocio: una fila por ítem -> un proceso; los de registro cerrado no salen.
+from datetime import datetime
+ahora = datetime(2026, 9, 28, 12, 0, tzinfo=uniq.LIMA)
+fila = {"idProcedimiento": 7, "detTipoProceso": "Subasta Inversa Electrónica", "nomenclatura": "SIE-SIE-1-2026-X-1",
+        "sintesisProceso": "ADQUISICIÓN DE CEMENTO", "detEntidad": "MUNICIPALIDAD PROVINCIAL DE LA CONVENCION",
+        "detItem": "CEMENTO PORTLAND TIPO IP", "fecInicioParticipantes": "24/09/2026 00:01:00",
+        "fecFinParticipantes": "01/10/2026 23:59:00", "fechaConvocatoria": "23/09/2026 22:29:00",
+        "valorReferencial": "---", "documentoBase": "abc"}
+procesos = seace.procesos_oportunidades([fila, dict(fila, detItem="AGREGADO FINO"),
+                                         dict(fila, idProcedimiento=8, fecFinParticipantes="27/09/2026 23:59:00")], ahora)
+assert len(procesos) == 1 and procesos[0]["id"] == "p-7" and procesos[0]["monto"] == 0, procesos
+assert "AGREGADO FINO" in procesos[0]["texto"] and procesos[0]["bases"].endswith("fileCode=abc")
+assert seace.coincide(procesos[0]["texto"], "agregado fino")  # busca también en los ítems
 print("OK")

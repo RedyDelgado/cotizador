@@ -1,13 +1,13 @@
-"""Búsqueda por palabras clave en SEACE, solo con fuentes públicas (sin login ni captcha).
+"""Búsqueda en SEACE, solo con fuentes públicas oficiales (sin login ni captcha).
 
 - Contrataciones menores (hasta 8 UIT): buscador público de prod6.seace.gob.pe, en tiempo real.
-- Procedimientos de selección (licitaciones, subastas, adjudicaciones...): API de Contrataciones
-  Abiertas del OECE (estándar OCDS), que llega con 3 a 4 días de retraso.
+- Procedimientos de selección (licitaciones, concursos, subastas, comparación de precios...):
+  "Oportunidades de Negocio" del SEACE (prod4.seace.gob.pe/openegocio), que lista los
+  procedimientos con el registro de participantes abierto, con su cronograma y sus bases.
 El buscador clásico de SEACE 3.0 (prod2) está protegido con reCAPTCHA: no se usa.
 
 Cómo se busca una frase como "sistema de seguridad ciudadana":
-- ninguno de los dos buscadores sirve para frases (uno busca el texto exacto, el otro cualquier
-  palabra suelta) y los dos distinguen tildes;
+- los buscadores no sirven para frases (buscan el texto exacto) y distinguen tildes;
 - así que a cada fuente se le pide la raíz de la palabra más larga ("seguridad"), con y sin
   tildes, y aquí se queda solo lo que contiene TODAS las palabras de la frase, por raíz y
   sin distinguir tildes ni mayúsculas ("sistema académico" encuentra "SISTEMA DE GESTIÓN ACADÉMICA");
@@ -16,17 +16,19 @@ Cómo se busca una frase como "sistema de seguridad ciudadana":
 import itertools
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime
+from urllib.parse import quote
 
 URL_MENORES = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/buscador"
 FICHA_MENOR = "https://prod6.seace.gob.pe/buscador-publico/contrataciones/{}"
 PORTAL_MENORES = "https://prod6.seace.gob.pe/buscador-publico/contrataciones"
-URL_OCDS = "https://contratacionesabiertas.oece.gob.pe/api/v1/search"
-FICHA_OCDS = "https://contratacionesabiertas.oece.gob.pe/proceso/{}"
-BUSQUEDA_OCDS = "https://contratacionesabiertas.oece.gob.pe/busqueda?search={}"
-PORTAL_OCDS = "https://contratacionesabiertas.oece.gob.pe"
-DIAS_OCDS = 30          # procedimientos convocados en los últimos 30 días
-VACIAS = {"de", "del", "la", "las", "el", "los", "y", "e", "o", "u", "para", "por", "en", "con", "a", "al", "un", "una"}
+# Oportunidades de Negocio: objeto / departamento / texto / tipo de proceso ("0" = todos).
+URL_OPORTUNIDADES = ("https://prod4.seace.gob.pe:8086/api/oportunidades/codObjeto/codDepartamento/"
+                     "sintesisProceso/codTipoProceso/0/0/{}/0")
+FICHA_PROCESO = "https://prod4.seace.gob.pe/openegocio/#/ficha/idProceso/{}"
+URL_BASES = "https://prod1.seace.gob.pe/SeaceWeb-PRO/SdescargarArchivoAlfresco?fileCode={}"
+PORTAL_OPORTUNIDADES = "https://prod4.seace.gob.pe/openegocio/"
+VACIAS ={"de", "del", "la", "las", "el", "los", "y", "e", "o", "u", "para", "por", "en", "con", "a", "al", "un", "una"}
 
 
 # ------------------------------------------------------------ palabras clave
@@ -87,8 +89,9 @@ def consulta(frase):
 
 
 # ------------------------------------------------------------------- fuentes
-# Las dos devuelven el mismo formato de proceso:
-# {id, fuente, tipo, titulo, entidad, codigo, url, cierre, abierta, convocatoria, monto}
+# Todas devuelven el mismo formato de proceso:
+# {id, fuente, tipo, titulo, entidad, codigo, url, cierre, abierta, inicio, convocatoria, monto}
+# y, si aplica, "bases" (enlace al documento) y "pie_cierre" (qué es la fecha de cierre).
 
 def menores(s, frase, ahora):
     """Contrataciones menores vigentes que calzan con la frase y cuya cotización no ha cerrado."""
@@ -120,34 +123,60 @@ def menores(s, frase, ahora):
     return list(salida.values())
 
 
+def _fecha(texto, zona):
+    return datetime.strptime(texto, "%d/%m/%Y %H:%M:%S").replace(tzinfo=zona) if texto else None
+
+
+def _monto(texto):
+    try:
+        return float(texto)
+    except (TypeError, ValueError):
+        return 0  # "---": valor referencial reservado
+
+
+def procesos_oportunidades(filas, ahora):
+    """Filas de Oportunidades de Negocio (una por ítem) -> un proceso por idProcedimiento, solo los
+    que tienen el registro de participantes abierto o por abrir."""
+    por_proceso = {}
+    for fila in filas:
+        por_proceso.setdefault(fila["idProcedimiento"], []).append(fila)
+    salida = []
+    for id_proceso, items in por_proceso.items():
+        x = items[0]
+        cierre = _fecha(x.get("fecFinParticipantes") or x.get("fechaFin"), ahora.tzinfo)
+        if not cierre or cierre < ahora:
+            continue
+        inicio = _fecha(x.get("fecInicioParticipantes") or x.get("fechaInicio"), ahora.tzinfo)
+        salida.append({
+            "id": f"p-{id_proceso}", "fuente": "SEACE", "tipo": x.get("detTipoProceso") or "Procedimiento",
+            "titulo": limpio(x.get("sintesisProceso") or x.get("detItem")), "entidad": limpio(x.get("detEntidad")),
+            "codigo": x.get("nomenclatura") or "", "url": FICHA_PROCESO.format(id_proceso),
+            "bases": URL_BASES.format(x["documentoBase"]) if x.get("documentoBase") else None,
+            "cierre": cierre, "abierta": not inicio or inicio <= ahora, "inicio": inicio, "pie_cierre": "fin de registro",
+            "convocatoria": _fecha(x.get("fechaConvocatoria"), ahora.tzinfo), "monto": _monto(x.get("valorReferencial")),
+            # la búsqueda mira la descripción del proceso y la de todos sus ítems
+            "texto": " ".join([x.get("sintesisProceso") or ""] + [i.get("detItem") or "" for i in items]),
+        })
+    return salida
+
+
 def procedimientos(s, frase, ahora):
-    """Procedimientos de selección que calzan con la frase, convocados en los últimos DIAS_OCDS días."""
-    desde = (ahora - timedelta(days=DIAS_OCDS)).date()
-    meses = sorted({(desde.year, desde.month), (ahora.year, ahora.month)})
+    """Procedimientos de selección con registro abierto que calzan con la frase."""
     salida = {}
     for termino in consulta(frase):
-        for anio, mes in meses:
-            pagina = 1
-            while True:
-                r = s.get(URL_OCDS, timeout=60, params={
-                    "search": termino, "year": anio, "month": mes, "page": pagina, "paginateBy": 100, "format": "json"})
-                r.raise_for_status()
-                datos = r.json()
-                for resultado in datos.get("results") or []:
-                    c = resultado.get("compiledRelease") or {}
-                    t = c.get("tender") or {}
-                    inicio = (t.get("tenderPeriod") or {}).get("startDate")
-                    if (not inicio or datetime.fromisoformat(inicio).date() < desde
-                            or not coincide(t.get("description") or "", frase)):
-                        continue
-                    salida[c["ocid"]] = {
-                        "id": c["ocid"], "fuente": "SEACE", "tipo": t.get("procurementMethodDetails") or "Procedimiento",
-                        "titulo": limpio(t.get("description")), "entidad": limpio((c.get("buyer") or {}).get("name")),
-                        "codigo": t.get("title") or "", "url": FICHA_OCDS.format(c["ocid"]),
-                        "cierre": None, "abierta": False, "inicio": None, "convocatoria": datetime.fromisoformat(inicio),
-                        "monto": (t.get("value") or {}).get("amount") or 0,  # 0 si el valor referencial es reservado
-                    }
-                if not (datos.get("pagination") or {}).get("has_next"):
-                    break
-                pagina += 1
+        r = s.get(URL_OPORTUNIDADES.format(quote(termino, safe="")), timeout=90)
+        r.raise_for_status()
+        for x in procesos_oportunidades(r.json() or [], ahora):
+            if coincide(x["texto"], frase):
+                salida[x["id"]] = x
     return list(salida.values())
+
+
+def procedimientos_de_entidades(s, entidades, ahora):
+    """{entidad: [procesos con registro abierto]} para las entidades que sigues (parte de su nombre,
+    sin distinguir tildes ni mayúsculas). Descarga el listado completo una sola vez (~3.000 filas)."""
+    r = s.get(URL_OPORTUNIDADES.format("0"), timeout=180)
+    r.raise_for_status()
+    procesos = procesos_oportunidades(r.json() or [], ahora)
+    normal = lambda t: " ".join(sin_tildes(t).upper().split())
+    return {e: [x for x in procesos if normal(e) in normal(x["entidad"])] for e in entidades}
