@@ -4,18 +4,23 @@ Todos los días a las 07:00 (hora de Lima) envía **un informe** por correo, con
 
 1. **Resumen ejecutivo**: coincidencias, nuevas, por cerrar (2 días o menos) y cotizaciones UNIQ
    activas, más una frase que lo resume.
-2. **Coincidencias por palabra clave**: una tabla por cada palabra clave con los procesos de todas
-   las fuentes, ordenados por fecha de cierre, con etiquetas NUEVO / CIERRA PRONTO / fuente, el
-   enlace a la ficha oficial y a las bases. Lo nuevo sale completo; lo ya informado, solo como
-   recordatorio en una línea cuando está por cerrar.
+2. **Cotizaciones UNIQ activas**: todas, por fecha límite, marcando las que coinciden con tus
+   palabras clave.
 3. **Entidades que sigues** (si defines `ENTIDADES`): todos sus procedimientos con el registro
    abierto, sin filtrar por palabra clave.
-4. **Cotizaciones UNIQ activas**: todas, por fecha límite, marcando las que coinciden con tus
-   palabras clave.
+4. **Coincidencias por palabra clave**: una tabla por cada palabra clave con los procesos de todas
+   las fuentes, ordenados por fecha de cierre, con etiquetas NUEVO / CIERRA PRONTO / fuente, el
+   enlace a la ficha oficial y a las bases. Lo nuevo sale completo; lo ya informado, solo como
+   recordatorio en una línea cuando está por cerrar. Si una palabra clave trae 60 resultados o
+   más, el informe te sugiere afinarla.
 5. **Fichas técnicas** de las cotizaciones UNIQ nuevas: datos del sistema y el extracto del
    **TDR/EETT** para decidir si cotizar (ítems y cantidades, objetivo, **requisitos del proveedor**,
    plazo y lugar, pago, adelantos, garantías, penalidades y características técnicas).
 6. **Fuentes**: estado de cada fuente.
+
+Lo corto y siempre importante va arriba. Gmail recorta los correos de más de ~102 KB, así que el
+informe tiene un tope: reparte un cupo de filas entre todas las palabras clave y agrega fichas solo
+mientras quepan; las que no entran quedan enlazadas desde la tabla de la UNIQ.
 
 Fuentes, todas públicas, oficiales y sin login ni captcha:
 
