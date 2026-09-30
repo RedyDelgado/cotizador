@@ -306,17 +306,19 @@ def marca(titulo, ahora):
 
 
 def encabezado(ahora, palabras, entidades, zonas=()):
-    chips = "".join(etiqueta(mostrar(p) if seace.es_exacta(p) else p, "contorno") for p in palabras) or (
-        f'<span style="font-size:13px;color:{C["suave"]}">ninguna (define PALABRAS_CLAVE en .env)</span>')
-    filas = [("Palabras clave:", chips)]
+    filas = []
+    if palabras:
+        filas.append(("Palabras clave:", "".join(etiqueta(mostrar(p) if seace.es_exacta(p) else p, "contorno")
+                                                 for p in palabras)))
     if zonas:
         filas.append(("Regiones:", "".join(etiqueta(nombre_zona(z), "gris") for z in zonas)))
     if entidades:
         filas.append(("Entidades:", "".join(etiqueta(nombre_propio(e), "gris") for e in entidades)))
     celdas = "".join(f'<tr><td valign="top" style="padding:1px 8px 0 0;font-size:12px;line-height:18px;font-weight:600;'
                      f'color:{C["cuerpo"]};white-space:nowrap">{rotulo}</td><td>{valor}</td></tr>' for rotulo, valor in filas)
-    return (marca("Informe diario de oportunidades", ahora) +
-            f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px">{celdas}</table>')
+    return (marca("Informe diario de oportunidades", ahora)
+            + (f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px">{celdas}</table>'
+               if celdas else ""))
 
 
 def aviso_fuentes(fuentes):
@@ -601,58 +603,70 @@ def html_fuentes(fuentes):
 
 # ------------------------------------------------------------------ informe
 
-def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zonas=(), completo=True):
+def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zonas=(), completo=True, con_uniq=True):
     """convs: cotizaciones UNIQ (None si la fuente falló). grupos: [(frase, [procesos])].
     fuentes: [(nombre, ok, detalle, cobertura)]. seguidas: [(entidad, [procesos])].
     zonas: [(zona, [procesos])] de REGIONES.
     completo: todo en detalle cada día, aunque el correo sea largo (Gmail muestra "Ver mensaje completo");
     si es False, lo ya informado se resume y el correo se mantiene bajo el límite de Gmail.
+    con_uniq: False para quien no debe recibir las cotizaciones de la UNIQ (perfil con uniq = no).
     Devuelve (asunto, texto, html)."""
+    if not con_uniq:
+        convs = []
     todos = [x for _, items in grupos for x in items]
-    nuevos = sum(x["nuevo"] for x in todos)
-    pronto = sum(1 for x in todos if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA)
+    en_entidades = [x for _, items in seguidas for x in items]
+    en_zonas = [x for _, items in zonas for x in items]
+    del_seace = todos + en_entidades + en_zonas
+    nuevos = sum(x["nuevo"] for x in del_seace)
+    pronto = sum(1 for x in del_seace if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA)
     uniq_nuevas = [c for c in convs or [] if c["nueva"]]
 
-    asunto = (f"Informe de oportunidades – {ahora:%d/%m/%Y} · {plural(len(todos), 'coincidencia', 'coincidencias')}"
-              f" ({nuevos} nuevas)" + (f" · UNIQ: {len(convs)} activas" if convs is not None else ""))
+    asunto = (f"Informe de oportunidades – {ahora:%d/%m/%Y} · "
+              + (f"{plural(len(todos), 'coincidencia', 'coincidencias')} ({sum(x['nuevo'] for x in todos)} nuevas)"
+                 if palabras else plural(nuevos, "proceso nuevo", "procesos nuevos"))
+              + (f" · UNIQ: {len(convs)} activas" if con_uniq and convs is not None else ""))
 
-    if not palabras:
-        frase = "No hay palabras clave configuradas: define PALABRAS_CLAVE en el archivo .env."
-    elif not todos:
-        frase = "Hoy no hay procesos que coincidan con tus palabras clave."
-    else:
-        frase = (f"Hay {plural(len(todos), 'proceso que coincide', 'procesos que coinciden')} con tus palabras clave"
-                 + (f"; {plural(nuevos, 'es nuevo', 'son nuevos')}" if nuevos else "")
-                 + (f" y {plural(pronto, 'cierra', 'cierran')} en 2 días o menos" if pronto else "") + ".")
+    partes = []
+    if palabras and not todos:
+        partes.append("Hoy no hay procesos que coincidan con tus palabras clave.")
+    elif palabras:
+        partes.append(f"Hay {plural(len(todos), 'proceso que coincide', 'procesos que coinciden')} con tus palabras clave"
+                      + (f"; {plural(sum(x['nuevo'] for x in todos), 'es nuevo', 'son nuevos')}"
+                         if any(x["nuevo"] for x in todos) else "") + ".")
     for entidad, items in seguidas:
-        frase += (f" {nombre_propio(entidad)} tiene "
-                  f"{plural(len(items), 'proceso abierto', 'procesos abiertos')}.")
+        partes.append(f"{nombre_propio(entidad)} tiene {plural(len(items), 'proceso abierto', 'procesos abiertos')}.")
     if zonas:
-        en_zonas = [x for _, items in zonas for x in items]
-        frase += (f" En tus regiones hay {plural(len(en_zonas), 'otro proceso abierto', 'otros procesos abiertos')}"
-                  f" ({plural(sum(x['nuevo'] for x in en_zonas), 'nuevo', 'nuevos')}).")
-    if convs is None:
-        frase += " La página de cotizaciones de la UNIQ no respondió hoy."
-    else:
-        frase += (f" En la UNIQ hay {plural(len(convs), 'cotización activa', 'cotizaciones activas')}"
-                  f" ({plural(len(uniq_nuevas), 'nueva', 'nuevas')}).")
+        partes.append(f"En tus regiones hay {plural(len(en_zonas), 'otro proceso abierto', 'otros procesos abiertos')}"
+                      f" ({plural(sum(x['nuevo'] for x in en_zonas), 'nuevo', 'nuevos')}).")
+    if pronto:
+        partes.append(f"{plural(pronto, 'proceso cierra', 'procesos cierran')} en 2 días o menos.")
+    if con_uniq and convs is None:
+        partes.append("La página de cotizaciones de la UNIQ no respondió hoy.")
+    elif con_uniq:
+        partes.append(f"En la UNIQ hay {plural(len(convs), 'cotización activa', 'cotizaciones activas')}"
+                      f" ({plural(len(uniq_nuevas), 'nueva', 'nuevas')}).")
+    frase = " ".join(partes)
 
     numero = iter(range(1, 10))  # las secciones opcionales no dejan huecos en la numeración
     cuerpo = encabezado(ahora, palabras, [e for e, _ in seguidas], [z for z, _ in zonas]) + aviso_fuentes(fuentes)
     cuerpo += seccion(next(numero), "s_resumen", "Resumen ejecutivo")
-    cuerpo += indicadores([(len(todos), "Coincidencias", False), (nuevos, "Nuevas", False),
-                           (pronto, "Por cerrar", True), (len(convs or []), "UNIQ activas", False)])
+    cifras = ([(len(todos), "Coincidencias", False)] if palabras else [])
+    cifras += [(len(en_entidades) + len(en_zonas), "Entidades y regiones", False)] if (seguidas or zonas) else []
+    cifras += [(nuevos, "Nuevas", False), (pronto, "Por cerrar", True)]
+    cifras += [(len(convs or []), "UNIQ activas", False)] if con_uniq else []
+    cuerpo += indicadores(cifras)
     cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
 
     # Primero lo corto y siempre importante (UNIQ y entidades); después lo que puede crecer mucho
     # (coincidencias y fichas), así lo que Gmail llegara a cortar es lo menos urgente.
-    cuerpo += seccion(next(numero), "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
-    if convs is None:
-        cuerpo += f'<p style="font-size:14px;color:{C["rojo"]}">La fuente no respondió hoy.</p>'
-    elif not convs:
-        cuerpo += f'<p style="font-size:14px;color:{C["suave"]}">No hay convocatorias activas hoy.</p>'
-    else:
-        cuerpo += html_uniq(convs, ahora, completo)
+    if con_uniq:
+        cuerpo += seccion(next(numero), "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
+        if convs is None:
+            cuerpo += f'<p style="font-size:14px;color:{C["rojo"]}">La fuente no respondió hoy.</p>'
+        elif not convs:
+            cuerpo += f'<p style="font-size:14px;color:{C["suave"]}">No hay convocatorias activas hoy.</p>'
+        else:
+            cuerpo += html_uniq(convs, ahora, completo)
 
     # Modo resumido: cada sección larga usa una parte de lo que QUEDA bajo el límite de Gmail (lo que no
     # gasta pasa a la siguiente); las fichas llenan el resto. En modo completo no hay tope.
@@ -668,17 +682,16 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
         cuerpo += (html_grupos_completo(seguidas, ahora, nombre_propio, vacio) if completo else
                    html_grupos(seguidas, ahora, nombre_propio, vacio, cupo={"nuevas_breves": 30}, max_bytes=queda(0.30)))
 
-    cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
-                      "SEACE (contrataciones menores y procedimientos de selección con el registro abierto) "
-                      "y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
-    if not palabras:
-        cuerpo += f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>'
-    elif completo:
-        cuerpo += html_grupos_completo(grupos, ahora, mostrar, "Sin coincidencias en este momento.", amplia=MUY_GENERAL)
-    else:
-        cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.",
-                              cupo={"completas": CUPO_COMPLETAS, "breves": CUPO_BREVES}, amplia=MUY_GENERAL,
-                              max_bytes=queda(0.45))
+    if palabras:
+        cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
+                          "SEACE (contrataciones menores y procedimientos de selección con el registro abierto)"
+                          + (" y cotizaciones de la UNIQ" if con_uniq else "") + ". Ordenadas por fecha de cierre.")
+        if completo:
+            cuerpo += html_grupos_completo(grupos, ahora, mostrar, "Sin coincidencias en este momento.", amplia=MUY_GENERAL)
+        else:
+            cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.",
+                                  cupo={"completas": CUPO_COMPLETAS, "breves": CUPO_BREVES}, amplia=MUY_GENERAL,
+                                  max_bytes=queda(0.45))
 
     # Las regiones van después de las palabras clave: son lo más largo (cientos de procesos) y lo
     # buscado específicamente tiene que quedar arriba, en la parte que Gmail muestra sin hacer clic.
@@ -712,7 +725,7 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
 
-    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas, zonas, completo)
+    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas, zonas, completo, con_uniq)
     return asunto, texto, envolver(cuerpo, "Informe de oportunidades")
 
 
@@ -735,26 +748,31 @@ def texto_grupos(grupos, ahora, titulo, completo=True):
     return lineas
 
 
-def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), zonas=(), completo=True):
+def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), zonas=(), completo=True, con_uniq=True):
     """Versión en texto plano (clientes sin HTML y vista previa del --dry-run)."""
     numero = iter(range(1, 10))
     lineas = ["MONITOR DE CONTRATACIONES PÚBLICAS", "Informe diario de oportunidades",
               f"{fecha_larga(ahora)} · emitido a las {ahora:%H:%M}",
-              f"Palabras clave: {', '.join(palabras) or 'ninguna'}"]
+              ]
+    if palabras:
+        lineas.append(f"Palabras clave: {', '.join(palabras)}")
     if zonas:
         lineas.append(f"Regiones: {', '.join(nombre_zona(z) for z, _ in zonas)}")
     if seguidas:
         lineas.append(f"Entidades: {', '.join(nombre_propio(e) for e, _ in seguidas)}")
-    lineas += ["", f"{next(numero)}. RESUMEN EJECUTIVO", frase, "", f"{next(numero)}. COTIZACIONES UNIQ ACTIVAS"]
-    if convs is None:
-        lineas.append("La fuente no respondió hoy.")
-    for c in convs or []:
-        lineas += [f"  {'[NUEVA] ' if c['nueva'] else ''}{oracion(c['titulo'])}",
-                   f"    {c['tipo']} · N° {c['numero']} · {nombre_propio(c['dependencia'])} · "
-                   f"vence {fecha_corta(c['limite'])}", f"    {c['tdr_url'] or uniq.URL_PAGINA}"]
+    lineas += ["", f"{next(numero)}. RESUMEN EJECUTIVO", frase]
+    if con_uniq:
+        lineas += ["", f"{next(numero)}. COTIZACIONES UNIQ ACTIVAS"]
+        if convs is None:
+            lineas.append("La fuente no respondió hoy.")
+        for c in convs or []:
+            lineas += [f"  {'[NUEVA] ' if c['nueva'] else ''}{oracion(c['titulo'])}",
+                       f"    {c['tipo']} · N° {c['numero']} · {nombre_propio(c['dependencia'])} · "
+                       f"vence {fecha_corta(c['limite'])}", f"    {c['tdr_url'] or uniq.URL_PAGINA}"]
     if seguidas:
         lineas += ["", f"{next(numero)}. ENTIDADES QUE SIGUES"] + texto_grupos(seguidas, ahora, nombre_propio, completo)
-    lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar, completo)
+    if palabras:
+        lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar, completo)
     if zonas:
         lineas += ["", f"{next(numero)}. REGIONES QUE SIGUES"] + texto_grupos(zonas, ahora, nombre_zona, completo)
     con_ficha = list(convs or []) if completo else [c for c in convs or [] if c["nueva"]]
@@ -773,12 +791,13 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), z
 
 
 def construir_alerta(detalle, ahora):
-    """Correo de falla total: ninguna fuente respondió."""
+    """Correo de falla: un informe no se pudo generar o enviar (fuentes caídas, configuración errónea...)."""
     asunto = f"Monitor de contrataciones: no se pudo generar el informe – {ahora:%d/%m/%Y %H:%M}"
-    texto = f"No se pudo generar el informe de hoy: ninguna fuente respondió.\n\n{detalle}"
+    texto = f"No se pudo generar o enviar el informe de hoy.\n\n{detalle}"
     cuerpo = (marca("No se pudo generar el informe", ahora)
               + f'<p style="margin:18px 0 10px;font-size:14px;line-height:22px;color:{C["cuerpo"]}">'
-                f'Ninguna de las fuentes respondió. Revisa si las páginas cambiaron o están caídas. Detalle técnico:</p>'
+                f'Revisa si las páginas de las fuentes cambiaron o están caídas, o si hay un error en la '
+                f'configuración. Detalle técnico:</p>'
               + f'<pre style="white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;'
                 f'line-height:17px;background:{C["cabecera"]};border:1px solid {C["linea"]};border-radius:6px;'
                 f'padding:12px;margin:0">{h(detalle)}</pre>')

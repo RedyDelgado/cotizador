@@ -1,6 +1,8 @@
-"""Autoprueba sin red: lector de TDR/EETT, formato de textos y búsqueda por frase. Uso: python test_bot.py"""
+"""Autoprueba sin red: lector de TDR/EETT, formato de textos, búsqueda por frase y perfiles.
+Uso: python test_bot.py"""
 import pymupdf
 
+import bot
 import informe
 import seace
 import uniq
@@ -80,4 +82,88 @@ html_chico = informe.html_grupos([("cemento", muchos)], ahora, informe.mostrar, 
                                  max_bytes=8_000)
 assert len(html_chico.encode()) < 12_000 and "nuevos más" in html_chico, len(html_chico)
 assert informe.png_icono("s_regiones")[:4] == b"\x89PNG"
+
+# Perfiles: perfiles.ini de prueba en una carpeta temporal.
+import os, tempfile
+from pathlib import Path
+
+
+def con_ini(texto):
+    carpeta = Path(tempfile.mkdtemp())
+    (carpeta / "perfiles.ini").write_text(texto, "utf-8")
+    bot.DIR = carpeta
+    return bot.cargar_perfiles
+
+
+def debe_fallar(texto, contiene):
+    try:
+        con_ini(texto)()
+    except ValueError as e:
+        assert contiene in str(e), (contiene, str(e))
+    else:
+        raise AssertionError(f"no falló: {texto!r}")
+
+
+carga = con_ini('[ana]\ncorreos = a@x.com, b@y.org\npalabras_clave = software,"sistema académico",cemento\n'
+                'regiones = CUSCO,APURIMAC/ABANCAY\nuniq = no\ncompleto = NO\n\n[luis]\ncorreos = l@x.com\nentidades = LA CONVENCION\n')
+perfiles = carga()
+ana, luis = perfiles
+assert [p["nombre"] for p in perfiles] == ["ana", "luis"]
+assert ana["correos"] == ["a@x.com", "b@y.org"] and ana["palabras"] == ["software", '"sistema académico"', "cemento"]
+assert ana["uniq"] is False and ana["completo"] is False and luis["uniq"] is True and luis["completo"] is True
+assert ana["regiones"] == ["CUSCO", "APURIMAC/ABANCAY"] and luis["palabras"] == [] and luis["entidades"] == ["LA CONVENCION"]
+debe_fallar("[x]\npalabras_clave = software\n", "falta 'correos'")
+debe_fallar("[x]\ncorreos = no-es-correo\n", "correo no válido")
+debe_fallar("[x]\ncorreos = a@x.com\npalabra_clave = software\n", "clave desconocida 'palabra_clave'")
+debe_fallar("[x]\ncorreos = a@x.com\nuniq = no\n", "no sigue nada")
+debe_fallar("[x]\ncorreos = a@x.com\nuniq = si\n[x]\ncorreos = b@x.com\n", "x")  # sección duplicada
+debe_fallar("# vacío\n", "ningún perfil")
+
+# Sin perfiles.ini: un perfil con lo que diga el .env.
+bot.DIR = Path(tempfile.mkdtemp())
+os.environ.update(MAIL_TO="m@x.com", PALABRAS_CLAVE="cemento", ENTIDADES="", REGIONES="CUSCO")
+solo, = bot.cargar_perfiles()
+assert solo["legacy"] and solo["correos"] == ["m@x.com"] and solo["palabras"] == ["cemento"] and solo["uniq"]
+
+# Lo NUEVO es propio de cada perfil; el del .env conserva las claves de siempre.
+estado = {"vistos": [1], "seace": ["p-1"]}
+assert bot.estado_de(estado, solo) is estado
+bot.estado_de(estado, ana)["vistos"] = [9]
+assert bot.estado_de(estado, luis) == {} and estado["perfiles"]["ana"]["vistos"] == [9] and estado["vistos"] == [1]
+
+# La sesión descarga una sola vez cada URL, y una falla tampoco se reintenta por cada perfil.
+llamadas = []
+
+
+def get_falso(self, url, **kw):
+    llamadas.append(url)
+    if "cae" in url:
+        raise bot.requests.ConnectionError("sin red")
+    return "respuesta"
+
+
+get_real = bot.requests.Session.get
+bot.requests.Session.get = get_falso  # la caché se prueba sobre el GET de la clase base
+try:
+    cs = bot.SesionConCache()
+    assert cs.get("https://a", params={"q": 1}) == cs.get("https://a", params={"q": 1}) == "respuesta"
+    assert cs.get("https://a", params={"q": 2}) == "respuesta" and llamadas == ["https://a", "https://a"]
+    for _ in range(2):
+        try:
+            cs.get("https://cae")
+        except bot.requests.ConnectionError:
+            pass
+    assert llamadas.count("https://cae") == 1
+finally:
+    bot.requests.Session.get = get_real
+
+# Informe sin UNIQ ni palabras clave (alguien que solo sigue una entidad): sin secciones vacías.
+proceso = {"id": "p-1", "fuente": "SEACE", "tipo": "Licitación Pública", "titulo": "ADQUISICION DE CEMENTO", "entidad": "MUNICIPALIDAD DISTRITAL DE ECHARATI",
+           "codigo": "LP-1", "url": "https://x/1", "bases": None, "cierre": datetime(2026, 10, 5, 23, 59, tzinfo=uniq.LIMA),
+           "abierta": True, "inicio": None, "convocatoria": None, "monto": 0, "nuevo": True, "pie_cierre": "fin de registro"}
+asunto, texto, html = informe.construir_informe(ahora, [], [], [], [("SEACE · Entidades que sigues", True, "1", "x")],
+                                                [("MUNICIPALIDAD DISTRITAL DE ECHARATI", [proceso])], [], True, False)
+assert "1 proceso nuevo" in asunto and "UNIQ" not in asunto, asunto
+assert "Cotizaciones UNIQ" not in html and "Coincidencias por palabra clave" not in html and "Palabras clave" not in html
+assert "Entidades que sigues" in html and "UNIQ" not in texto and "COINCIDENCIAS" not in texto
 print("OK")

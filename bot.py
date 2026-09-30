@@ -9,6 +9,7 @@ Junta fuentes públicas en un solo informe:
 El diseño del correo está en informe.py.
 """
 import argparse
+import configparser
 import json
 import logging
 import os
@@ -65,9 +66,30 @@ def configurar_log():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
 
 
+class SesionConCache(requests.Session):
+    """Los GET repetidos (misma URL y parámetros) se responden desde memoria, errores incluidos: con varios
+    perfiles cada fuente se descarga una sola vez y una fuente caída no se reintenta por cada perfil."""
+
+    def __init__(self):
+        super().__init__()
+        self._cache = {}
+
+    def get(self, url, params=None, **kwargs):
+        clave = (url, tuple(sorted((k, str(v)) for k, v in (params or {}).items())))
+        if clave not in self._cache:
+            try:
+                self._cache[clave] = super().get(url, params=params, **kwargs)
+            except Exception as e:
+                self._cache[clave] = e
+        respuesta = self._cache[clave]
+        if isinstance(respuesta, Exception):
+            raise respuesta
+        return respuesta
+
+
 def sesion():
     """Sesión HTTP con 3 reintentos (espera creciente) para caídas de red y errores 5xx."""
-    s = requests.Session()
+    s = SesionConCache()
     s.headers["User-Agent"] = UA
     reintentos = Retry(total=3, backoff_factor=5, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=None)
     s.mount("https://", HTTPAdapter(max_retries=reintentos))
@@ -112,21 +134,27 @@ def guardar_estado(estado, ahora):
 
 # ------------------------------------------------------------------- fuentes
 
-def leer_uniq(s, ahora, estado, fuentes):
+def descargar_uniq(s, ahora):
+    """(convocatorias, error): se descarga una sola vez y cada perfil trabaja con su copia."""
     try:
         convs = uniq.obtener_convocatorias(s, ahora)
         for c in convs:
             uniq.leer_tdr(s, c)
     except Exception as e:
         log.exception("Falló la fuente UNIQ")
-        fuentes.append(("UNIQ · Cotizaciones en línea", False, error_corto(e), "Tiempo real"))
+        return None, e
+    log.info("UNIQ: %d convocatorias activas", len(convs))
+    return convs, None
+
+
+def leer_uniq(base, error, estado, fuentes):
+    """Copia de las convocatorias para un perfil, con "nueva" según lo que ese perfil ya recibió."""
+    if base is None:
+        fuentes.append(("UNIQ · Cotizaciones en línea", False, error_corto(error), "Tiempo real"))
         return None
     vistos = set(estado.get("vistos", []))
-    for c in convs:
-        c["nueva"] = c["id"] not in vistos
-    fuentes.append(("UNIQ · Cotizaciones en línea", True, f"{len(convs)} activas", "Tiempo real"))
-    log.info("UNIQ: %d convocatorias activas", len(convs))
-    return convs
+    fuentes.append(("UNIQ · Cotizaciones en línea", True, f"{len(base)} activas", "Tiempo real"))
+    return [dict(c, nueva=c["id"] not in vistos) for c in base]
 
 
 def proceso_uniq(c):
@@ -176,12 +204,12 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
     return grupos, seace_ids, bool(errores)
 
 
-def buscar_zonas(s, ahora, regiones, estado, fuentes):
-    """[(zona, [procesos])]: todo lo abierto en las regiones/provincias de REGIONES."""
+def buscar_zonas(s, ahora, regiones, estado, fuentes, cache):
+    """[(zona, [procesos])]: todo lo abierto en las regiones/provincias de REGIONES.
+    cache: distrito de Oportunidades de Negocio -> provincia (compartido por todos los perfiles)."""
     if not regiones:
         return [], False
     vistos = set(estado.get("seace", []))
-    cache = estado.setdefault("ubigeos", {})  # distrito de Oportunidades de Negocio -> provincia
     cobertura = "Procedimientos y contrataciones menores"
     try:
         zonas = seace.resolver_zonas(s, regiones)
@@ -232,12 +260,13 @@ def buscar_entidades(s, ahora, entidades, estado, fuentes):
 
 # --------------------------------------------------------------------- envío
 
-def enviar(asunto, texto, cuerpo_html):
-    faltan = [k for k in ("SMTP_USER", "SMTP_PASS", "MAIL_TO") if not os.environ.get(k)]
+def enviar(asunto, texto, cuerpo_html, destinos):
+    faltan = [k for k in ("SMTP_USER", "SMTP_PASS") if not os.environ.get(k)]
     if faltan:
         raise RuntimeError(f"Faltan variables en .env: {', '.join(faltan)}")
+    if not destinos:
+        raise RuntimeError("No hay destinatarios: define MAIL_TO en .env o correos en perfiles.ini")
     usuario = os.environ["SMTP_USER"]
-    destinos = [d.strip() for d in os.environ["MAIL_TO"].split(",") if d.strip()]
 
     msg = EmailMessage()
     msg["Subject"] = asunto
@@ -258,69 +287,167 @@ def enviar(asunto, texto, cuerpo_html):
     log.info("Correo enviado a %s: %s", ", ".join(destinos), asunto)
 
 
+# ------------------------------------------------------------------- perfiles
+# Cada perfil es un informe distinto para unos correos: qué palabras clave, entidades y regiones sigue,
+# si recibe la UNIQ y si lo quiere completo. Se definen en perfiles.ini (ver perfiles.ini.example); sin
+# ese archivo hay un solo perfil con lo que diga el .env (MAIL_TO, PALABRAS_CLAVE, ENTIDADES, REGIONES).
+
+CLAVES_PERFIL = {"correos", "palabras_clave", "entidades", "regiones", "uniq", "completo"}
+
+
+def lista(texto):
+    return [x.strip() for x in (texto or "").split(",") if x.strip()]
+
+
+def es_si(texto, por_defecto=True):
+    if texto is None or not texto.strip():
+        return por_defecto
+    return texto.strip().lower() not in ("no", "0", "false", "falso")
+
+
+def cargar_perfiles():
+    """[{nombre, correos, palabras, entidades, regiones, uniq, completo, legacy}]. ValueError si el
+    archivo tiene un error (con el mensaje para corregirlo)."""
+    ruta = DIR / "perfiles.ini"
+    if not ruta.exists():
+        return [{"nombre": "principal", "legacy": True, "correos": lista(os.environ.get("MAIL_TO")),
+                 "palabras": lista(os.environ.get("PALABRAS_CLAVE")), "entidades": lista(os.environ.get("ENTIDADES")),
+                 "regiones": lista(os.environ.get("REGIONES")), "uniq": True,
+                 "completo": es_si(os.environ.get("INFORME_COMPLETO"))}]
+    ini = configparser.ConfigParser(interpolation=None)  # sin interpolación: el % es un carácter normal
+    try:
+        ini.read(ruta, encoding="utf-8")
+    except configparser.Error as e:
+        raise ValueError(f"perfiles.ini: {str(e).splitlines()[0]}")
+    perfiles = []
+    for nombre in ini.sections():
+        sec = ini[nombre]
+        desconocidas = sorted(set(sec) - CLAVES_PERFIL)
+        if desconocidas:
+            raise ValueError(f"perfiles.ini [{nombre}]: clave desconocida {desconocidas[0]!r} "
+                             f"(válidas: {', '.join(sorted(CLAVES_PERFIL))})")
+        correos = lista(sec.get("correos"))
+        if not correos:
+            raise ValueError(f"perfiles.ini [{nombre}]: falta 'correos'")
+        malos = [c for c in correos if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", c)]
+        if malos:
+            raise ValueError(f"perfiles.ini [{nombre}]: correo no válido: {malos[0]!r}")
+        perfil = {"nombre": nombre, "legacy": False, "correos": correos, "palabras": lista(sec.get("palabras_clave")),
+                  "entidades": lista(sec.get("entidades")), "regiones": lista(sec.get("regiones")),
+                  "uniq": es_si(sec.get("uniq")), "completo": es_si(sec.get("completo"))}
+        if not (perfil["uniq"] or perfil["palabras"] or perfil["entidades"] or perfil["regiones"]):
+            raise ValueError(f"perfiles.ini [{nombre}]: no sigue nada (sin uniq, palabras_clave, entidades ni regiones)")
+        perfiles.append(perfil)
+    if not perfiles:
+        raise ValueError("perfiles.ini no tiene ningún perfil (cada uno empieza con [nombre])")
+    return perfiles
+
+
+def estado_de(estado, perfil):
+    """Lo que ese perfil ya recibió. El perfil del .env (sin perfiles.ini) sigue usando las claves de
+    siempre; los de perfiles.ini guardan lo suyo aparte, así lo NUEVO es propio de cada uno."""
+    if perfil["legacy"]:
+        return estado
+    return estado.setdefault("perfiles", {}).setdefault(perfil["nombre"], {})
+
+
+def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
+    """Informe de un perfil: (asunto, texto, html, ids_uniq, ids_seace, seace_fallo)."""
+    propio = estado_de(estado, perfil)
+    fuentes = []
+    convs = leer_uniq(uniq_base, uniq_error, propio, fuentes) if perfil["uniq"] else None
+    grupos, seace_ids, seace_fallo = buscar_coincidencias(s, ahora, perfil["palabras"], convs, propio, fuentes)
+    seguidas, _, entidades_fallo = buscar_entidades(s, ahora, perfil["entidades"], propio, fuentes)
+    zonas, zonas_fallo = buscar_zonas(s, ahora, perfil["regiones"], propio, fuentes, estado.setdefault("ubigeos", {}))
+    # Las contrataciones menores de las entidades que sigues salen de lo ya descargado para sus regiones,
+    # y lo que ya está en "Entidades que sigues" no se repite en "Regiones que sigues".
+    seguidas = [(e, sorted(items + [x for _, zitems in zonas for x in zitems if x["tipo"] == "Contratación menor"
+                                    and seace.normal(e) in seace.normal(x["entidad"])], key=lambda x: x["cierre"]))
+                for e, items in seguidas]
+    en_entidades = {x["id"] for _, items in seguidas for x in items}
+    zonas = [(z, [x for x in items if x["id"] not in en_entidades]) for z, items in zonas]
+    seace_ids |= en_entidades | {x["id"] for _, items in zonas for x in items}
+
+    if fuentes and all(not ok for _, ok, _, _ in fuentes):
+        raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
+    asunto, texto, cuerpo = informe.construir_informe(ahora, perfil["palabras"], convs, grupos, fuentes, seguidas, zonas,
+                                                      perfil["completo"], perfil["uniq"])
+    ids_uniq = sorted(c["id"] for c in convs) if convs is not None else None
+    return asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo or entidades_fallo or zonas_fallo
+
+
+def destinatarios_de_alerta(perfiles):
+    """A quién van los avisos técnicos: MAIL_ALERTAS, si no MAIL_TO, si no el primer perfil."""
+    return lista(os.environ.get("MAIL_ALERTAS")) or lista(os.environ.get("MAIL_TO")) or (perfiles[0]["correos"] if perfiles else [])
+
+
 # ---------------------------------------------------------------------- main
 
 def main():
-    p = argparse.ArgumentParser(description="Informe diario de oportunidades: UNIQ y SEACE por palabras clave.")
-    p.add_argument("--dry-run", action="store_true", help="imprime el informe en consola; no envía ni actualiza el estado")
-    p.add_argument("--html-preview", action="store_true", help="guarda el HTML en preview.html; no envía")
+    p = argparse.ArgumentParser(description="Informe diario de oportunidades: UNIQ y SEACE, uno por perfil.")
+    p.add_argument("--dry-run", action="store_true", help="imprime los informes en consola; no envía ni actualiza el estado")
+    p.add_argument("--html-preview", action="store_true",
+                   help="guarda el HTML en preview.html (preview_<perfil>.html si hay varios); no envía")
+    p.add_argument("--perfil", help="genera solo el perfil con ese nombre")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")  # tildes en la consola de Windows
     cargar_env()
     configurar_log()
     sin_envio = args.dry_run or args.html_preview
     ahora = datetime.now(uniq.LIMA)
-    palabras = [x.strip() for x in os.environ.get("PALABRAS_CLAVE", "").split(",") if x.strip()]
-    entidades = [x.strip() for x in os.environ.get("ENTIDADES", "").split(",") if x.strip()]
-    regiones = [x.strip() for x in os.environ.get("REGIONES", "").split(",") if x.strip()]
+
+    fallos = []  # un informe que falla no impide los demás; al final sale un solo aviso con todo
+
+    def avisar(perfiles):
+        if fallos and not sin_envio:
+            try:
+                enviar(*informe.construir_alerta("\n\n".join(fallos), ahora), destinatarios_de_alerta(perfiles))
+            except Exception:
+                log.exception("Tampoco se pudo enviar el correo de alerta")
+
+    try:
+        perfiles = cargar_perfiles()
+    except ValueError as e:
+        log.error("%s", e)
+        print(e, file=sys.stderr)
+        fallos.append(str(e))
+        avisar([])
+        return 1
+    if args.perfil:
+        perfiles = [x for x in perfiles if x["nombre"].lower() == args.perfil.lower()]
+        if not perfiles:
+            print(f"No existe el perfil {args.perfil!r}", file=sys.stderr)
+            return 1
 
     try:
         estado = cargar_estado()
         s = sesion()
-        fuentes = []
-        convs = leer_uniq(s, ahora, estado, fuentes)
-        grupos, seace_ids, seace_fallo = buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes)
-        seguidas, ids_entidades, entidades_fallo = buscar_entidades(s, ahora, entidades, estado, fuentes)
-        zonas, zonas_fallo = buscar_zonas(s, ahora, regiones, estado, fuentes)
-        # Las contrataciones menores de las entidades que sigues salen de lo ya descargado para sus regiones,
-        # y lo que ya está en "Entidades que sigues" no se repite en "Regiones que sigues".
-        seguidas = [(e, sorted(items + [x for _, zitems in zonas for x in zitems if x["tipo"] == "Contratación menor"
-                                        and seace.normal(e) in seace.normal(x["entidad"])], key=lambda x: x["cierre"]))
-                    for e, items in seguidas]
-        en_entidades = {x["id"] for _, items in seguidas for x in items}
-        zonas = [(z, [x for x in items if x["id"] not in en_entidades]) for z, items in zonas]
-        seace_ids |= en_entidades | {x["id"] for _, items in zonas for x in items}
-        seace_fallo = seace_fallo or entidades_fallo or zonas_fallo
-
-        if all(not ok for _, ok, _, _ in fuentes):
-            raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
-
-        # Por defecto todo en detalle, aunque el correo sea largo; INFORME_COMPLETO=no lo resume.
-        completo = os.environ.get("INFORME_COMPLETO", "si").strip().lower() not in ("no", "0", "false")
-        asunto, texto, cuerpo = informe.construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas, zonas,
-                                                          completo)
-        if args.html_preview:
-            (DIR / "preview.html").write_text(informe.con_data_uri(cuerpo), "utf-8")
-            print(f"HTML guardado en {DIR / 'preview.html'}")
-        if args.dry_run:
-            print(f"{asunto}\n\n{texto}\n")
-        if not sin_envio:
-            enviar(asunto, texto, cuerpo)
-            # Solo tras enviar: si falla, mañana siguen como nuevos. Si una fuente cayó, se conserva lo
-            # visto antes para no volver a marcar como nuevo lo que ya salió.
-            if convs is not None:
-                estado["vistos"] = sorted(c["id"] for c in convs)
-            estado["seace"] = sorted(seace_ids | (set(estado.get("seace", [])) if seace_fallo else set()))
-            guardar_estado(estado, ahora)
-        return 0
-    except Exception:
-        log.exception("No se pudo generar el informe")
-        if not sin_envio:
+        uniq_base, uniq_error = descargar_uniq(s, ahora) if any(x["uniq"] for x in perfiles) else (None, None)
+        for perfil in perfiles:
             try:
-                enviar(*informe.construir_alerta(traceback.format_exc(), ahora))
+                log.info("Perfil %s", perfil["nombre"])
+                asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo = generar(perfil, s, ahora, estado, uniq_base, uniq_error)
+                if args.html_preview:
+                    ficha = re.sub(r"\W+", "_", perfil["nombre"])
+                    archivo = DIR / ("preview.html" if len(perfiles) == 1 else f"preview_{ficha}.html")
+                    archivo.write_text(informe.con_data_uri(cuerpo), "utf-8")
+                    print(f"HTML de [{perfil['nombre']}] guardado en {archivo}")
+                if args.dry_run:
+                    print(f"=== PERFIL {perfil['nombre']} → {', '.join(perfil['correos'])}\n{asunto}\n\n{texto}\n")
+                if not sin_envio:
+                    enviar(asunto, texto, cuerpo, perfil["correos"])
+                    # Solo tras enviar: si falla, mañana siguen como nuevos. Si una fuente cayó, se conserva lo
+                    # visto antes para no volver a marcar como nuevo lo que ya salió.
+                    propio = estado_de(estado, perfil)
+                    if ids_uniq is not None:
+                        propio["vistos"] = ids_uniq
+                    propio["seace"] = sorted(seace_ids | (set(propio.get("seace", [])) if seace_fallo else set()))
+                    guardar_estado(estado, ahora)
             except Exception:
-                log.exception("Tampoco se pudo enviar el correo de alerta")
-        return 1
+                log.exception("No se pudo generar o enviar el informe de [%s]", perfil["nombre"])
+                fallos.append(f"Perfil [{perfil['nombre']}]:\n{traceback.format_exc()}")
+        avisar(perfiles)
+        return 1 if fallos else 0
     finally:
         try:
             import resource  # solo Linux

@@ -86,21 +86,66 @@ REGIONES=CUSCO,MADRE DE DIOS,APURIMAC/ABANCAY,APURIMAC/COTABAMBAS
 el SEACE (sin importar tildes ni mayúsculas); si uno no existe, la tabla de fuentes lo dice. Lo que
 ya salió en "Entidades que sigues" no se repite aquí.
 
+## Un informe distinto por persona (perfiles)
+
+Por defecto todos los correos de `MAIL_TO` reciben el mismo informe. Si quieres que cada uno reciba
+cosas distintas, copia `perfiles.ini.example` como `perfiles.ini` y define un bloque por persona o grupo:
+
+```ini
+[redy]
+correos = redy.delgado@gmail.com
+palabras_clave = software,"sistema académico",sistema de seguridad ciudadana
+entidades = LA CONVENCION,MUNICIPALIDAD DISTRITAL DE ECHARATI
+regiones = CUSCO
+uniq = si
+completo = si
+
+[grupo indescar]
+correos = Grupoindescar@gmail.com
+palabras_clave = cemento,fierro,maíz
+regiones = CUSCO,MADRE DE DIOS
+uniq = no
+completo = no
+```
+
+| Clave | Qué hace |
+|---|---|
+| `correos` | uno o varios destinatarios del bloque, separados por coma (obligatoria) |
+| `palabras_clave`, `entidades`, `regiones` | lo que sigue ese bloque, con la misma sintaxis de arriba; todas opcionales |
+| `uniq` | `si` (por defecto) o `no`: recibir las cotizaciones de la UNIQ |
+| `completo` | `si` (por defecto) o `no`: informe entero cada día, o lo ya informado resumido |
+
+- **Lo NUEVO es propio de cada bloque:** a cada uno se le marca lo que no vio en su último correo.
+- **Las fuentes se consultan una sola vez** aunque haya varios bloques: agregar personas no suma carga
+  a los portales ni al VPS.
+- **Un bloque que falla no impide los demás.** El aviso técnico va a `MAIL_ALERTAS` (o a `MAIL_TO`, o al
+  primer bloque si no defines ninguno).
+- **El archivo se valida:** una clave mal escrita, un correo inválido o un bloque que no sigue nada
+  dan un error claro en el log y en el aviso.
+- **Con `perfiles.ini`**, `MAIL_TO`, `PALABRAS_CLAVE`, `ENTIDADES`, `REGIONES` e `INFORME_COMPLETO` del
+  `.env` dejan de usarse. La cuenta que envía (`SMTP_USER`, `SMTP_PASS`) sigue ahí. Sin `perfiles.ini`
+  todo funciona como antes.
+- El archivo lleva correos personales: **no se versiona** (está en `.gitignore`). En el VPS se crea a
+  partir del ejemplo: `cp /opt/cotizaciones-uniq/perfiles.ini.example /opt/cotizaciones-uniq/perfiles.ini`
+  y se edita con `nano`; el instalador no lo pisa.
+
 ## Archivos
 
 | | |
 |---|---|
-| `bot.py` | orquesta: lee las fuentes, arma el informe y lo envía |
+| `bot.py` | orquesta: lee las fuentes, arma un informe por perfil y lo envía |
 | `uniq.py` | cotizaciones UNIQ y lectura del TDR/EETT |
 | `seace.py` | búsquedas en SEACE (contrataciones menores y Oportunidades de Negocio) y la regla de coincidencia |
 | `informe.py` | diseño del correo (HTML y texto) |
 | `test_bot.py` | autoprueba sin red: `python test_bot.py` |
 | `.env` | credenciales, palabras clave, entidades y regiones (a partir de `.env.example`); permisos 600, **no se versiona** |
-| `data/estado.json` | lo que salió en el informe anterior (para marcar lo nuevo) y la provincia de cada distrito ya consultado |
+| `perfiles.ini` | (opcional) un bloque por persona; se crea a partir de `perfiles.ini.example`; **no se versiona** |
+| `data/estado.json` | lo que recibió cada perfil en su último informe (para marcar lo nuevo) y la provincia de cada distrito ya consultado |
 | `logs/bot.log` | log con rotación (1 MB × 3); `logs/cron.err` solo si Python se cae |
 
-Opciones: `--dry-run` imprime el informe en consola sin enviar y `--html-preview` lo guarda en
-`preview.html`. Ninguna de las dos actualiza el estado.
+Opciones: `--dry-run` imprime los informes en consola sin enviar; `--html-preview` los guarda en
+`preview.html` (`preview_<perfil>.html` si hay varios); `--perfil NOMBRE` genera solo ese perfil.
+Ninguna actualiza el estado ni envía correos.
 
 ## Gmail: contraseña de aplicación
 

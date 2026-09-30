@@ -2,5 +2,6 @@
 data/
 logs/
 venv/
-preview.html
+preview*.html
 __pycache__/
+perfiles.ini
