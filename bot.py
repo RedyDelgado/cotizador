@@ -316,8 +316,12 @@ def cargar_perfiles():
                  "completo": es_si(os.environ.get("INFORME_COMPLETO"))}]
     ini = configparser.ConfigParser(interpolation=None)  # sin interpolación: el % es un carácter normal
     try:
-        ini.read(ruta, encoding="utf-8")
-    except configparser.Error as e:
+        with open(ruta, encoding="utf-8") as f:  # (ini.read ignoraría en silencio un archivo sin permiso)
+            ini.read_file(f)
+    except PermissionError:
+        raise ValueError(f"perfiles.ini: el usuario del bot no puede leerlo (permisos). Corrige con: "
+                         f"sudo chown {os.environ.get('USER') or 'cotizbot'}:cotizbot {ruta} && sudo chmod 600 {ruta}")
+    except (configparser.Error, UnicodeDecodeError) as e:
         raise ValueError(f"perfiles.ini: {str(e).splitlines()[0]}")
     perfiles = []
     for nombre in ini.sections():
