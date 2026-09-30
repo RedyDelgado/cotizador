@@ -51,6 +51,7 @@ GLIFOS = {
     "landmark": '<line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/>',
     "file-text": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
     "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+    "map-pin": '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
     "building-2": '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
     "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>',
     "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
@@ -69,6 +70,7 @@ ICONOS = {
     "s_resumen": ("chart-column", C["navy"]),
     "s_coinc": ("search", C["navy"]),
     "s_entidades": ("building-2", C["navy"]),
+    "s_regiones": ("map-pin", C["navy"]),
     "s_uniq": ("landmark", C["navy"]),
     "s_fichas": ("file-text", C["navy"]),
     "s_fuentes": ("database", C["navy"]),
@@ -303,10 +305,12 @@ def marca(titulo, ahora):
             f'{h(fecha_larga(ahora))} · Emitido a las {ahora:%H:%M} (hora de Lima)</div>')
 
 
-def encabezado(ahora, palabras, entidades):
+def encabezado(ahora, palabras, entidades, zonas=()):
     chips = "".join(etiqueta(mostrar(p) if seace.es_exacta(p) else p, "contorno") for p in palabras) or (
         f'<span style="font-size:13px;color:{C["suave"]}">ninguna (define PALABRAS_CLAVE en .env)</span>')
     filas = [("Palabras clave:", chips)]
+    if zonas:
+        filas.append(("Regiones:", "".join(etiqueta(nombre_zona(z), "gris") for z in zonas)))
     if entidades:
         filas.append(("Entidades:", "".join(etiqueta(nombre_propio(e), "gris") for e in entidades)))
     celdas = "".join(f'<tr><td valign="top" style="padding:1px 8px 0 0;font-size:12px;line-height:18px;font-weight:600;'
@@ -378,41 +382,92 @@ def repartir(items, ahora):
     return nuevos, pronto, len(items) - len(nuevos) - len(pronto)
 
 
-def fila_breve(x, ahora):
-    """Recordatorio de un proceso ya informado: título enlazado y fecha de cierre."""
+def fila_breve(x, ahora, primera=False):
+    """Una línea: título enlazado (con NUEVO si lo es), la entidad debajo y la fecha de cierre."""
     fecha, _, urgente = fecha_proceso(x, ahora)
-    borde = f"border-top:1px solid {C['linea']}"
-    return (f'<tr><td style="{borde};padding:8px 12px;font-size:13px;line-height:18px">'
-            f'<a href="{h(x["url"])}" style="color:{C["texto"]};text-decoration:none">{h(recortar(oracion(x["titulo"]), 90))}</a></td>'
-            f'<td align="right" style="{borde};padding:8px 12px;white-space:nowrap;text-align:right;font-size:13px;'
+    borde = "" if primera else f"border-top:1px solid {C['linea']};"
+    marca = etiqueta("NUEVO", "azul") if x["nuevo"] else ""
+    return (f'<tr><td style="{borde}padding:8px 12px;font-size:13px;line-height:18px">{marca}'
+            f'<a href="{h(x["url"])}" style="color:{C["texto"]};text-decoration:none">{h(recortar(oracion(x["titulo"]), 90))}</a>'
+            f'<div style="font-size:12px;line-height:16px;color:{C["suave"]}">{h(nombre_propio(x["entidad"]))}</div></td>'
+            f'<td align="right" valign="top" style="{borde}padding:8px 12px;white-space:nowrap;text-align:right;font-size:13px;'
             f'line-height:18px;font-weight:600;color:{C["rojo"] if urgente else C["texto"]}">{h(fecha)}</td></tr>')
 
 
-def html_grupos(grupos, ahora, titulo, vacio, cupo=None, amplia=None):
-    """Una tabla por grupo (palabra clave o entidad), ordenada por fecha de cierre.
-    cupo: {"completas": n, "breves": n} compartido entre todos los grupos, para que muchas palabras
-    clave juntas no hagan que Gmail corte el correo. amplia: desde cuántos resultados se avisa que
-    la palabra clave es demasiado general."""
-    cupo = cupo if cupo is not None else {"completas": 10 ** 6, "breves": 10 ** 6}
+def rotulo_tabla(texto, primera):
+    borde = "" if primera else f"border-top:1px solid {C['linea']};"
+    return (f'<tr><td colspan="2" style="{borde}background:{C["cabecera"]};padding:6px 12px;font-size:11px;'
+            f'line-height:16px;font-weight:600;letter-spacing:0.06em;color:{C["suave"]}">{h(texto)}</td></tr>')
+
+
+def html_grupos_completo(grupos, ahora, titulo, vacio, amplia=None):
+    """Modo completo: cada proceso abierto en fila completa, todos los días (NUEVO marca lo que aparece
+    por primera vez). El correo puede pasar los ~102 KB: Gmail muestra "Ver mensaje completo"."""
     salida = ""
     for nombre, items in grupos:
-        nuevos, pronto, resto = repartir(items, ahora)
-        n_completas = min(len(nuevos), MAX_FILAS, cupo["completas"])
-        n_breves = min(len(pronto), MAX_FILAS, cupo["breves"])
-        cupo["completas"] -= n_completas
-        cupo["breves"] -= n_breves
         filas = "".join(fila(i, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
                              detalle_proceso(x), *fecha_proceso(x, ahora), extra=enlace_bases(x))
-                        for i, x in enumerate(nuevos[:n_completas]))
-        if len(nuevos) > n_completas:
-            filas += fila_nota(f"y {len(nuevos) - n_completas} nuevos más.", seace.PORTAL_OPORTUNIDADES,
-                               "Ver en el portal", primera=not n_completas)
-        if n_breves:
-            filas += (f'<tr><td colspan="2" style="{"border-top:1px solid " + C["linea"] + ";" if filas else ""}'
-                      f'background:{C["cabecera"]};padding:6px 12px;font-size:11px;line-height:16px;font-weight:600;'
-                      f'letter-spacing:0.06em;color:{C["suave"]}">YA INFORMADOS · CIERRAN PRONTO</td></tr>')
-            filas += "".join(fila_breve(x, ahora) for x in pronto[:n_breves])
-        resto += len(pronto) - n_breves
+                        for i, x in enumerate(items))
+        if amplia and len(items) >= amplia:
+            filas += fila_nota(f"Esta palabra clave es muy general ({len(items)} resultados): hazla más específica "
+                               f"o ponla entre comillas junto a otra palabra.")
+        if not items:
+            filas = fila_nota(vacio, primera=True)
+        salida += subtitulo(titulo(nombre), plural(len(items), "abierto", "abiertos"))
+        salida += tabla([("Oportunidad", "left"), ("Cierre", "right")] if items else [], filas)
+    return salida
+
+
+def html_grupos(grupos, ahora, titulo, vacio, cupo=None, amplia=None, max_bytes=None):
+    """Una tabla por grupo (palabra clave, entidad o región), ordenada por fecha de cierre.
+    - Lo nuevo va en fila completa hasta cupo["completas"]; el resto de lo nuevo, en una línea
+      hasta cupo["nuevas_breves"]; lo ya informado que cierra pronto, en una línea hasta cupo["breves"].
+    - max_bytes: tope de la sección entera, para que Gmail no corte el correo.
+    - amplia: desde cuántos resultados se sugiere afinar la palabra clave.
+    Lo que no entra se cuenta en una línea con el enlace al portal."""
+    cupo = {"completas": 10 ** 6, "breves": 10 ** 6, "nuevas_breves": 0, **(cupo or {})}
+    limite = max_bytes if max_bytes is not None else 10 ** 9
+    usados, salida = 0, ""
+    RESERVA_GRUPO = 1_500  # título, recuadro y notas de cada grupo
+
+    def cabe(html_fila):
+        return len(salida.encode()) + usados + len(html_fila.encode()) + RESERVA_GRUPO <= limite
+
+    for nombre, items in grupos:
+        usados = 0  # filas de este grupo que todavía no están en `salida`
+        nuevos, pronto, resto = repartir(items, ahora)
+        filas, completas, breves_nuevas, recordatorios = "", 0, 0, 0
+        for x in nuevos:
+            if completas >= min(MAX_FILAS, cupo["completas"]):
+                break
+            f = fila(completas, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
+                     detalle_proceso(x), *fecha_proceso(x, ahora), extra=enlace_bases(x))
+            if not cabe(f):
+                break
+            filas, usados, completas = filas + f, usados + len(f.encode()), completas + 1
+        for x in nuevos[completas:]:
+            if breves_nuevas >= cupo["nuevas_breves"]:
+                break
+            f = fila_breve(x, ahora, primera=not filas)
+            if not cabe(f):
+                break
+            filas, usados, breves_nuevas = filas + f, usados + len(f.encode()), breves_nuevas + 1
+        cupo["completas"] -= completas
+        cupo["nuevas_breves"] -= breves_nuevas
+        faltan = len(nuevos) - completas - breves_nuevas
+        if faltan:
+            filas += fila_nota(f"y {plural(faltan, 'nuevo más', 'nuevos más')} (no entraron en el correo).",
+                               seace.PORTAL_OPORTUNIDADES, "Ver en el portal", primera=not filas)
+        for x in pronto:
+            if recordatorios >= min(MAX_FILAS, cupo["breves"]):
+                break
+            rotulo = rotulo_tabla("YA INFORMADOS · CIERRAN PRONTO", primera=not filas) if not recordatorios else ""
+            f = rotulo + fila_breve(x, ahora)
+            if not cabe(f):
+                break
+            filas, usados, recordatorios = filas + f, usados + len(f.encode()), recordatorios + 1
+        cupo["breves"] -= recordatorios
+        resto += len(pronto) - recordatorios
         if resto:
             filas += fila_nota(plural(resto, "proceso ya informado sigue abierto.", "procesos ya informados siguen abiertos."),
                                seace.PORTAL_OPORTUNIDADES, "Ver en el portal", primera=not filas)
@@ -422,15 +477,25 @@ def html_grupos(grupos, ahora, titulo, vacio, cupo=None, amplia=None):
         if not items:
             filas = fila_nota(vacio, primera=True)
         salida += subtitulo(titulo(nombre), plural(len(items), "abierto", "abiertos"))
-        # Sin filas de datos, una tabla con cabecera vacía se ve rota: basta el recuadro con la nota.
-        salida += tabla([("Oportunidad", "left"), ("Cierre", "right")] if n_completas else [], filas)
+        # Sin filas completas, la cabecera de columnas sobra: basta el recuadro con las líneas.
+        salida += tabla([("Oportunidad", "left"), ("Cierre", "right")] if completas else [], filas)
     return salida
 
 
-def html_uniq(convs, ahora):
+def nombre_zona(zona):
+    return nombre_propio(zona["region"]) + (f" · {nombre_propio(zona['provincia'])}" if zona["provincia"] else "")
+
+
+def html_uniq(convs, ahora, completo=True):
+    """Modo completo: todas en fila completa. Modo resumido: las ya informadas en una línea."""
     filas = ""
-    for i, c in enumerate(convs):
+    for c in convs:
         dias = dias_hasta(c["limite"], ahora)
+        if not completo and not c["nueva"]:
+            filas += fila_breve({"url": c["tdr_url"] or uniq.URL_PAGINA, "titulo": c["titulo"], "nuevo": False,
+                                 "entidad": f'N° {c["numero"]} · {nombre_propio(c["dependencia"])}', "cierre": c["limite"],
+                                 "abierta": True, "inicio": None, "convocatoria": None}, ahora, primera=not filas)
+            continue
         marcas = etiqueta("NUEVA", "azul") if c["nueva"] else ""
         if dias <= DIAS_ALERTA:
             marcas += etiqueta("CIERRA PRONTO", "rojo")
@@ -440,8 +505,8 @@ def html_uniq(convs, ahora):
             marcas += etiqueta("Sin postores en la anterior", "gris")
         conv = f' · {c["convocatoria"]}ª convocatoria' if c["convocatoria"] > 1 else ""
         detalle = f'{c["tipo"]} · N° {c["numero"]}{conv} · {nombre_propio(c["dependencia"])}'
-        filas += fila(i, recortar(oracion(c["titulo"]), 140), c["tdr_url"] or uniq.URL_PAGINA, marcas, detalle,
-                      cuando(c["limite"], ahora), "fecha límite", dias <= DIAS_ALERTA)
+        filas += fila(1 if filas else 0, recortar(oracion(c["titulo"]), 140), c["tdr_url"] or uniq.URL_PAGINA, marcas,
+                      detalle, cuando(c["limite"], ahora), "fecha límite", dias <= DIAS_ALERTA)
     return tabla([("Cotización", "left"), ("Vence", "right")], filas)
 
 
@@ -474,7 +539,9 @@ def html_ficha(c, ahora):
     """Ficha técnica de una cotización UNIQ nueva: datos del sistema + extracto del TDR/EETT."""
     dias = dias_hasta(c["limite"], ahora)
     conv = f' · {c["convocatoria"]}ª convocatoria' if c["convocatoria"] > 1 else ""
-    marcas = etiqueta("CIERRA PRONTO", "rojo") if dias <= DIAS_ALERTA else ""
+    marcas = etiqueta("NUEVA", "azul") if c["nueva"] else ""
+    if dias <= DIAS_ALERTA:
+        marcas += etiqueta("CIERRA PRONTO", "rojo")
     if c.get("coincide"):
         marcas += etiqueta(f'Coincide: {c["coincide"]}', "contorno")
     if c["desierta"]:
@@ -534,9 +601,12 @@ def html_fuentes(fuentes):
 
 # ------------------------------------------------------------------ informe
 
-def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
+def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zonas=(), completo=True):
     """convs: cotizaciones UNIQ (None si la fuente falló). grupos: [(frase, [procesos])].
     fuentes: [(nombre, ok, detalle, cobertura)]. seguidas: [(entidad, [procesos])].
+    zonas: [(zona, [procesos])] de REGIONES.
+    completo: todo en detalle cada día, aunque el correo sea largo (Gmail muestra "Ver mensaje completo");
+    si es False, lo ya informado se resume y el correo se mantiene bajo el límite de Gmail.
     Devuelve (asunto, texto, html)."""
     todos = [x for _, items in grupos for x in items]
     nuevos = sum(x["nuevo"] for x in todos)
@@ -556,7 +626,11 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
                  + (f" y {plural(pronto, 'cierra', 'cierran')} en 2 días o menos" if pronto else "") + ".")
     for entidad, items in seguidas:
         frase += (f" {nombre_propio(entidad)} tiene "
-                  f"{plural(len(items), 'procedimiento con registro abierto', 'procedimientos con registro abierto')}.")
+                  f"{plural(len(items), 'proceso abierto', 'procesos abiertos')}.")
+    if zonas:
+        en_zonas = [x for _, items in zonas for x in items]
+        frase += (f" En tus regiones hay {plural(len(en_zonas), 'otro proceso abierto', 'otros procesos abiertos')}"
+                  f" ({plural(sum(x['nuevo'] for x in en_zonas), 'nuevo', 'nuevos')}).")
     if convs is None:
         frase += " La página de cotizaciones de la UNIQ no respondió hoy."
     else:
@@ -564,7 +638,7 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
                   f" ({plural(len(uniq_nuevas), 'nueva', 'nuevas')}).")
 
     numero = iter(range(1, 10))  # las secciones opcionales no dejan huecos en la numeración
-    cuerpo = encabezado(ahora, palabras, [e for e, _ in seguidas]) + aviso_fuentes(fuentes)
+    cuerpo = encabezado(ahora, palabras, [e for e, _ in seguidas], [z for z, _ in zonas]) + aviso_fuentes(fuentes)
     cuerpo += seccion(next(numero), "s_resumen", "Resumen ejecutivo")
     cuerpo += indicadores([(len(todos), "Coincidencias", False), (nuevos, "Nuevas", False),
                            (pronto, "Por cerrar", True), (len(convs or []), "UNIQ activas", False)])
@@ -578,32 +652,57 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
     elif not convs:
         cuerpo += f'<p style="font-size:14px;color:{C["suave"]}">No hay convocatorias activas hoy.</p>'
     else:
-        cuerpo += html_uniq(convs, ahora)
+        cuerpo += html_uniq(convs, ahora, completo)
+
+    # Modo resumido: cada sección larga usa una parte de lo que QUEDA bajo el límite de Gmail (lo que no
+    # gasta pasa a la siguiente); las fichas llenan el resto. En modo completo no hay tope.
+    reserva = len((seccion(9, "s_fuentes", "Fuentes") + html_fuentes(fuentes)).encode()) + 1_000
+
+    def queda(fraccion):
+        return max(0, int((LIMITE_HTML - len(cuerpo.encode()) - reserva) * fraccion))
 
     if seguidas:
         cuerpo += seccion(next(numero), "s_entidades", "Entidades que sigues",
-                          "Todos sus procedimientos de selección con el registro abierto, sin filtrar por palabra clave.")
-        cuerpo += html_grupos(seguidas, ahora, nombre_propio, "Sin procedimientos con el registro abierto.")
+                          "Todo lo que tienen abierto (procedimientos y contrataciones menores), sin filtrar por palabra clave.")
+        vacio = "Sin procesos abiertos en este momento."
+        cuerpo += (html_grupos_completo(seguidas, ahora, nombre_propio, vacio) if completo else
+                   html_grupos(seguidas, ahora, nombre_propio, vacio, cupo={"nuevas_breves": 30}, max_bytes=queda(0.30)))
 
     cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
                       "SEACE (contrataciones menores y procedimientos de selección con el registro abierto) "
                       "y cotizaciones de la UNIQ. Ordenadas por fecha de cierre.")
-    cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.",
-                          cupo={"completas": CUPO_COMPLETAS, "breves": CUPO_BREVES}, amplia=MUY_GENERAL) if palabras else (
-        f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>')
+    if not palabras:
+        cuerpo += f'<p style="font-size:14px;color:{C["suave"]}">Define PALABRAS_CLAVE en el archivo .env para activar esta sección.</p>'
+    elif completo:
+        cuerpo += html_grupos_completo(grupos, ahora, mostrar, "Sin coincidencias en este momento.", amplia=MUY_GENERAL)
+    else:
+        cuerpo += html_grupos(grupos, ahora, mostrar, "Sin coincidencias en este momento.",
+                              cupo={"completas": CUPO_COMPLETAS, "breves": CUPO_BREVES}, amplia=MUY_GENERAL,
+                              max_bytes=queda(0.45))
 
-    # Las fichas entran mientras el correo no pase del límite de Gmail; las demás quedan enlazadas
-    # desde la tabla de cotizaciones UNIQ (cada fila abre su TDR/EETT).
-    reserva = len((seccion(9, "s_fuentes", "Fuentes") + html_fuentes(fuentes)).encode())
+    # Las regiones van después de las palabras clave: son lo más largo (cientos de procesos) y lo
+    # buscado específicamente tiene que quedar arriba, en la parte que Gmail muestra sin hacer clic.
+    if zonas:
+        cuerpo += seccion(next(numero), "s_regiones", "Regiones que sigues",
+                          "Todo lo abierto en esas regiones y provincias (gobierno regional, municipalidades, redes de "
+                          "salud, UGEL, universidades...), que no esté ya en las secciones anteriores.")
+        vacio = "Sin procesos abiertos en este momento."
+        cuerpo += (html_grupos_completo(zonas, ahora, nombre_zona, vacio) if completo else
+                   html_grupos(zonas, ahora, nombre_zona, vacio, cupo={"completas": 10, "nuevas_breves": 40, "breves": 15},
+                               max_bytes=queda(0.80)))
+
+    # Completo: ficha de todas las cotizaciones UNIQ activas. Resumido: solo las nuevas, mientras quepan
+    # bajo el límite de Gmail; las demás quedan enlazadas desde la tabla de cotizaciones UNIQ.
+    con_ficha = list(convs or []) if completo else uniq_nuevas
     fichas, omitidas = "", 0
-    for c in uniq_nuevas:
+    for c in con_ficha:
         ficha = html_ficha(c, ahora)
-        if len((cuerpo + fichas + ficha).encode()) + reserva > LIMITE_HTML:
+        if not completo and len((cuerpo + fichas + ficha).encode()) + reserva > LIMITE_HTML:
             omitidas += 1
         else:
             fichas += ficha
-    if uniq_nuevas:
-        cuerpo += seccion(next(numero), "s_fichas", "Fichas técnicas de las cotizaciones UNIQ nuevas",
+    if con_ficha:
+        cuerpo += seccion(next(numero), "s_fichas", "Fichas técnicas de las cotizaciones UNIQ" + ("" if completo else " nuevas"),
                           "Extracto del TDR/EETT: lo necesario para decidir si cotizar.") + fichas
         if omitidas:
             cuerpo += (f'<p style="margin:0 0 12px;font-size:13px;line-height:19px;color:{C["suave"]}">'
@@ -613,20 +712,21 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=()):
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
 
-    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas)
+    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas, zonas, completo)
     return asunto, texto, envolver(cuerpo, "Informe de oportunidades")
 
 
-def texto_grupos(grupos, ahora, titulo):
+def texto_grupos(grupos, ahora, titulo, completo=True):
     lineas = []
     for nombre, items in grupos:
         lineas.append(f"\n{titulo(nombre)} · {plural(len(items), 'abierto', 'abiertos')}")
-        nuevos, pronto, resto = repartir(items, ahora)
+        # completo: todo como si fuera nuevo (lista entera, sin resumir lo ya informado)
+        nuevos, pronto, resto = (items, [], 0) if completo else repartir(items, ahora)
         for x in pronto[:MAX_FILAS]:
             lineas.append(f"  [YA INFORMADO, CIERRA {fecha_proceso(x, ahora)[0].upper()}] {recortar(oracion(x['titulo']), 90)}")
         if resto:
             lineas.append(f"  ({plural(resto, 'proceso ya informado sigue abierto', 'procesos ya informados siguen abiertos')})")
-        for x in nuevos[:MAX_FILAS]:
+        for x in (nuevos if completo else nuevos[:MAX_FILAS]):
             fecha, pie, _ = fecha_proceso(x, ahora)
             lineas += [f"  {'[NUEVO] ' if x['nuevo'] else ''}{oracion(x['titulo'])}",
                        f"    {x['fuente']} · {x['tipo']} · {detalle_proceso(x)} · {pie}: {fecha}", f"    {x['url']}"]
@@ -635,12 +735,14 @@ def texto_grupos(grupos, ahora, titulo):
     return lineas
 
 
-def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=()):
+def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), zonas=(), completo=True):
     """Versión en texto plano (clientes sin HTML y vista previa del --dry-run)."""
     numero = iter(range(1, 10))
     lineas = ["MONITOR DE CONTRATACIONES PÚBLICAS", "Informe diario de oportunidades",
               f"{fecha_larga(ahora)} · emitido a las {ahora:%H:%M}",
               f"Palabras clave: {', '.join(palabras) or 'ninguna'}"]
+    if zonas:
+        lineas.append(f"Regiones: {', '.join(nombre_zona(z) for z, _ in zonas)}")
     if seguidas:
         lineas.append(f"Entidades: {', '.join(nombre_propio(e) for e, _ in seguidas)}")
     lineas += ["", f"{next(numero)}. RESUMEN EJECUTIVO", frase, "", f"{next(numero)}. COTIZACIONES UNIQ ACTIVAS"]
@@ -651,12 +753,14 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=()):
                    f"    {c['tipo']} · N° {c['numero']} · {nombre_propio(c['dependencia'])} · "
                    f"vence {fecha_corta(c['limite'])}", f"    {c['tdr_url'] or uniq.URL_PAGINA}"]
     if seguidas:
-        lineas += ["", f"{next(numero)}. ENTIDADES QUE SIGUES"] + texto_grupos(seguidas, ahora, nombre_propio)
-    lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar)
-    nuevas = [c for c in convs or [] if c["nueva"]]
-    if nuevas:
-        lineas += ["", f"{next(numero)}. FICHAS TÉCNICAS (UNIQ, NUEVAS)"]
-        for c in nuevas:
+        lineas += ["", f"{next(numero)}. ENTIDADES QUE SIGUES"] + texto_grupos(seguidas, ahora, nombre_propio, completo)
+    lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar, completo)
+    if zonas:
+        lineas += ["", f"{next(numero)}. REGIONES QUE SIGUES"] + texto_grupos(zonas, ahora, nombre_zona, completo)
+    con_ficha = list(convs or []) if completo else [c for c in convs or [] if c["nueva"]]
+    if con_ficha:
+        lineas += ["", f"{next(numero)}. FICHAS TÉCNICAS (UNIQ{'' if completo else ', NUEVAS'})"]
+        for c in con_ficha:
             lineas += ["", "-" * 60, f"{c['tipo']} · N° {c['numero']} · {oracion(c['titulo'])}",
                        f"Fecha límite: {fecha_corta(c['limite'])} · Dependencia: {nombre_propio(c['dependencia'])}"]
             if c["items"]:

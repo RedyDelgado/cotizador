@@ -176,6 +176,37 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
     return grupos, seace_ids, bool(errores)
 
 
+def buscar_zonas(s, ahora, regiones, estado, fuentes):
+    """[(zona, [procesos])]: todo lo abierto en las regiones/provincias de REGIONES."""
+    if not regiones:
+        return [], False
+    vistos = set(estado.get("seace", []))
+    cache = estado.setdefault("ubigeos", {})  # distrito de Oportunidades de Negocio -> provincia
+    cobertura = "Procedimientos y contrataciones menores"
+    try:
+        zonas = seace.resolver_zonas(s, regiones)
+    except Exception as e:
+        log.exception("No se pudieron resolver las REGIONES")
+        fuentes.append(("SEACE · Regiones que sigues", False, str(e) if isinstance(e, ValueError) else error_corto(e), cobertura))
+        return [], True
+    grupos, fallas = [], []
+    for zona in zonas:
+        try:
+            items = seace.procesos_de_zona(s, zona, ahora, cache)
+        except Exception as e:
+            log.exception("Falló la región %s", zona["texto"])
+            fallas.append(f"{zona['texto']}: {error_corto(e)}")
+            continue
+        for x in items:
+            x["nuevo"] = x["id"] not in vistos
+        grupos.append((zona, sorted(items, key=lambda x: x["cierre"])))
+    total = sum(len(i) for _, i in grupos)
+    fuentes.append(("SEACE · Regiones que sigues", not fallas,
+                    "; ".join(fallas) if fallas else f"{total} procesos abiertos", cobertura))
+    log.info("Regiones: %s", {z["texto"]: len(i) for z, i in grupos})
+    return grupos, bool(fallas)
+
+
 def buscar_entidades(s, ahora, entidades, estado, fuentes):
     """[(entidad, [procesos])]: todo lo abierto de las entidades que sigues, sin filtrar por palabra clave."""
     if not entidades:
@@ -241,6 +272,7 @@ def main():
     ahora = datetime.now(uniq.LIMA)
     palabras = [x.strip() for x in os.environ.get("PALABRAS_CLAVE", "").split(",") if x.strip()]
     entidades = [x.strip() for x in os.environ.get("ENTIDADES", "").split(",") if x.strip()]
+    regiones = [x.strip() for x in os.environ.get("REGIONES", "").split(",") if x.strip()]
 
     try:
         estado = cargar_estado()
@@ -249,13 +281,24 @@ def main():
         convs = leer_uniq(s, ahora, estado, fuentes)
         grupos, seace_ids, seace_fallo = buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes)
         seguidas, ids_entidades, entidades_fallo = buscar_entidades(s, ahora, entidades, estado, fuentes)
-        seace_ids |= ids_entidades
-        seace_fallo = seace_fallo or entidades_fallo
+        zonas, zonas_fallo = buscar_zonas(s, ahora, regiones, estado, fuentes)
+        # Las contrataciones menores de las entidades que sigues salen de lo ya descargado para sus regiones,
+        # y lo que ya está en "Entidades que sigues" no se repite en "Regiones que sigues".
+        seguidas = [(e, sorted(items + [x for _, zitems in zonas for x in zitems if x["tipo"] == "Contratación menor"
+                                        and seace.normal(e) in seace.normal(x["entidad"])], key=lambda x: x["cierre"]))
+                    for e, items in seguidas]
+        en_entidades = {x["id"] for _, items in seguidas for x in items}
+        zonas = [(z, [x for x in items if x["id"] not in en_entidades]) for z, items in zonas]
+        seace_ids |= en_entidades | {x["id"] for _, items in zonas for x in items}
+        seace_fallo = seace_fallo or entidades_fallo or zonas_fallo
 
         if all(not ok for _, ok, _, _ in fuentes):
             raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
 
-        asunto, texto, cuerpo = informe.construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas)
+        # Por defecto todo en detalle, aunque el correo sea largo; INFORME_COMPLETO=no lo resume.
+        completo = os.environ.get("INFORME_COMPLETO", "si").strip().lower() not in ("no", "0", "false")
+        asunto, texto, cuerpo = informe.construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas, zonas,
+                                                          completo)
         if args.html_preview:
             (DIR / "preview.html").write_text(informe.con_data_uri(cuerpo), "utf-8")
             print(f"HTML guardado en {DIR / 'preview.html'}")

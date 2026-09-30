@@ -22,9 +22,11 @@ from urllib.parse import quote
 URL_MENORES = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/buscador"
 FICHA_MENOR = "https://prod6.seace.gob.pe/buscador-publico/contrataciones/{}"
 PORTAL_MENORES = "https://prod6.seace.gob.pe/buscador-publico/contrataciones"
-# Oportunidades de Negocio: objeto / departamento / texto / tipo de proceso ("0" = todos).
+URL_MAESTRAS = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/maestras"
+# Oportunidades de Negocio: objeto / departamento (INEI, "08") / texto / tipo de proceso ("0" = todos).
 URL_OPORTUNIDADES = ("https://prod4.seace.gob.pe:8086/api/oportunidades/codObjeto/codDepartamento/"
-                     "sintesisProceso/codTipoProceso/0/0/{}/0")
+                     "sintesisProceso/codTipoProceso/0/{dep}/{texto}/0")
+URL_FICHA_API = "https://prod4.seace.gob.pe:8086/api/oportunidades/fichaProceso/idProceso/{}"
 FICHA_PROCESO = "https://prod4.seace.gob.pe/openegocio/#/ficha/idProceso/{}"
 URL_BASES = "https://prod1.seace.gob.pe/SeaceWeb-PRO/SdescargarArchivoAlfresco?fileCode={}"
 PORTAL_OPORTUNIDADES = "https://prod4.seace.gob.pe/openegocio/"
@@ -93,33 +95,40 @@ def consulta(frase):
 # {id, fuente, tipo, titulo, entidad, codigo, url, cierre, abierta, inicio, convocatoria, monto}
 # y, si aplica, "bases" (enlace al documento) y "pie_cierre" (qué es la fecha de cierre).
 
+def _menores_vigentes(s, ahora, **filtros):
+    """Contrataciones menores vigentes con la cotización abierta o por abrir, con los filtros del buscador
+    (palabra_clave, codigo_departamento, codigo_provincia)."""
+    salida, pagina = {}, 1
+    while True:
+        r = s.get(URL_MENORES, timeout=30, params={
+            "anio": ahora.year, "lista_estado_contrato": 2,  # 2 = Vigente
+            "page": pagina, "page_size": 100, "campo_orden": 1, "orden": 2, **filtros})
+        r.raise_for_status()
+        datos = r.json()
+        for x in datos.get("data") or []:
+            cierre = _fecha(x.get("fecFinCotizacion"), ahora.tzinfo)
+            if not cierre or cierre < ahora:  # "Vigente" sigue así un tiempo después de cerrar la cotización
+                continue
+            inicio = _fecha(x.get("fecIniCotizacion"), ahora.tzinfo)
+            salida[x["idContrato"]] = {
+                "id": f"m-{x['idContrato']}", "fuente": "SEACE", "tipo": "Contratación menor",
+                "titulo": limpio(x["desObjetoContrato"]), "entidad": limpio(x["nomEntidad"]),
+                "codigo": x["desContratacion"], "url": FICHA_MENOR.format(x["idContrato"]),
+                "cierre": cierre, "abierta": not inicio or inicio <= ahora, "inicio": inicio,
+                "convocatoria": None, "monto": 0,
+            }
+        if pagina * 100 >= (datos.get("pageable") or {}).get("totalElements", 0):
+            return list(salida.values())
+        pagina += 1
+
+
 def menores(s, frase, ahora):
     """Contrataciones menores vigentes que calzan con la frase y cuya cotización no ha cerrado."""
     salida = {}
     for termino in consulta(frase):
-        pagina = 1
-        while True:
-            r = s.get(URL_MENORES, timeout=30, params={
-                "palabra_clave": termino, "anio": ahora.year, "lista_estado_contrato": 2,  # 2 = Vigente
-                "page": pagina, "page_size": 100, "campo_orden": 1, "orden": 2})
-            r.raise_for_status()
-            datos = r.json()
-            for x in datos.get("data") or []:
-                if not x.get("fecFinCotizacion") or not coincide(x.get("desObjetoContrato") or "", frase):
-                    continue
-                cierre = datetime.strptime(x["fecFinCotizacion"], "%d/%m/%Y %H:%M:%S").replace(tzinfo=ahora.tzinfo)
-                if cierre < ahora:  # "Vigente" sigue así un tiempo después de cerrar la cotización
-                    continue
-                inicio = datetime.strptime(x["fecIniCotizacion"], "%d/%m/%Y %H:%M:%S").replace(tzinfo=ahora.tzinfo)
-                salida[x["idContrato"]] = {
-                    "id": f"m-{x['idContrato']}", "fuente": "SEACE", "tipo": "Contratación menor",
-                    "titulo": limpio(x["desObjetoContrato"]), "entidad": limpio(x["nomEntidad"]),
-                    "codigo": x["desContratacion"], "url": FICHA_MENOR.format(x["idContrato"]),
-                    "cierre": cierre, "abierta": inicio <= ahora, "inicio": inicio, "convocatoria": None, "monto": 0,
-                }
-            if pagina * 100 >= (datos.get("pageable") or {}).get("totalElements", 0):
-                break
-            pagina += 1
+        for x in _menores_vigentes(s, ahora, palabra_clave=termino):
+            if coincide(x["titulo"], frase):
+                salida[x["id"]] = x
     return list(salida.values())
 
 
@@ -164,7 +173,7 @@ def procedimientos(s, frase, ahora):
     """Procedimientos de selección con registro abierto que calzan con la frase."""
     salida = {}
     for termino in consulta(frase):
-        r = s.get(URL_OPORTUNIDADES.format(quote(termino, safe="")), timeout=90)
+        r = s.get(URL_OPORTUNIDADES.format(dep="0", texto=quote(termino, safe="")), timeout=90)
         r.raise_for_status()
         for x in procesos_oportunidades(r.json() or [], ahora):
             if coincide(x["texto"], frase):
@@ -172,11 +181,70 @@ def procedimientos(s, frase, ahora):
     return list(salida.values())
 
 
+def normal(texto):
+    return " ".join(sin_tildes(texto or "").upper().split())
+
+
 def procedimientos_de_entidades(s, entidades, ahora):
     """{entidad: [procesos con registro abierto]} para las entidades que sigues (parte de su nombre,
     sin distinguir tildes ni mayúsculas). Descarga el listado completo una sola vez (~3.000 filas)."""
-    r = s.get(URL_OPORTUNIDADES.format("0"), timeout=180)
+    r = s.get(URL_OPORTUNIDADES.format(dep="0", texto="0"), timeout=180)
     r.raise_for_status()
     procesos = procesos_oportunidades(r.json() or [], ahora)
-    normal = lambda t: " ".join(sin_tildes(t).upper().split())
     return {e: [x for x in procesos if normal(e) in normal(x["entidad"])] for e in entidades}
+
+
+# -------------------------------------------------------------- regiones
+
+def resolver_zonas(s, textos):
+    """["CUSCO", "APURIMAC/ABANCAY"] -> zonas con los códigos del SEACE. Una región sola trae todo el
+    departamento (gobierno regional, provincias, distritos, redes de salud, UGEL...); REGION/PROVINCIA
+    trae solo esa provincia. Falla con un mensaje claro si un nombre no existe."""
+    departamentos = {normal(d["nom"]): d for d in s.get(f"{URL_MAESTRAS}/listar-departamento", timeout=60).json()}
+    zonas = []
+    for texto in textos:
+        region, _, provincia = (p.strip() for p in texto.partition("/"))
+        dep = departamentos.get(normal(region))
+        if not dep:
+            raise ValueError(f"REGIONES: no existe la región {region!r} (se escribe como en el SEACE, p. ej. MADRE DE DIOS)")
+        zona = {"texto": texto, "region": dep["nom"], "dep_id": dep["id"], "dep_inei": dep["ubigeoInei"],
+                "provincia": None, "prov_id": None}
+        if provincia:
+            provincias = {normal(p["nom"]): p for p in
+                          s.get(f"{URL_MAESTRAS}/listar-provincia/{dep['id']}", timeout=60).json()}
+            prov = provincias.get(normal(provincia))
+            if not prov:
+                raise ValueError(f"REGIONES: {dep['nom']} no tiene la provincia {provincia!r}")
+            zona["provincia"], zona["prov_id"] = prov["nom"], prov["id"]
+        zonas.append(zona)
+    return zonas
+
+
+def _provincia_de_ubigeo(s, ubigeo, id_proceso, cache):
+    """Oportunidades de Negocio trae el distrito de la entidad como un número propio (no el del INEI):
+    la provincia se lee de la ficha de un proceso de ese distrito y queda guardada en cache."""
+    clave = str(ubigeo)
+    if clave not in cache:
+        ficha = s.get(URL_FICHA_API.format(id_proceso), timeout=60)
+        ficha.raise_for_status()
+        cronograma = (ficha.json() or {}).get("listaCronograma") or [{}]
+        cache[clave] = normal(cronograma[0].get("nombreProvincia"))
+    return cache[clave]
+
+
+def procesos_de_zona(s, zona, ahora, cache_ubigeos):
+    """Todo lo abierto en una región o provincia: procedimientos de selección y contrataciones menores."""
+    r = s.get(URL_OPORTUNIDADES.format(dep=zona["dep_inei"], texto="0"), timeout=180)
+    r.raise_for_status()
+    filas = r.json() or []
+    if zona["provincia"]:
+        un_proceso = {}
+        for f in filas:
+            un_proceso.setdefault(f["ubigeo"], f["idProcedimiento"])
+        adentro = {u for u, idp in un_proceso.items()
+                   if _provincia_de_ubigeo(s, u, idp, cache_ubigeos) == normal(zona["provincia"])}
+        filas = [f for f in filas if f["ubigeo"] in adentro]
+    filtros = {"codigo_departamento": zona["dep_id"]}
+    if zona["prov_id"]:
+        filtros["codigo_provincia"] = zona["prov_id"]
+    return procesos_oportunidades(filas, ahora) + _menores_vigentes(s, ahora, **filtros)

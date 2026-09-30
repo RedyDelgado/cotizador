@@ -6,21 +6,23 @@ Todos los días a las 07:00 (hora de Lima) envía **un informe** por correo, con
    activas, más una frase que lo resume.
 2. **Cotizaciones UNIQ activas**: todas, por fecha límite, marcando las que coinciden con tus
    palabras clave.
-3. **Entidades que sigues** (si defines `ENTIDADES`): todos sus procedimientos con el registro
-   abierto, sin filtrar por palabra clave.
+3. **Entidades que sigues** (si defines `ENTIDADES`): todo lo que tienen abierto, sin filtrar por
+   palabra clave.
 4. **Coincidencias por palabra clave**: una tabla por cada palabra clave con los procesos de todas
    las fuentes, ordenados por fecha de cierre, con etiquetas NUEVO / CIERRA PRONTO / fuente, el
-   enlace a la ficha oficial y a las bases. Lo nuevo sale completo; lo ya informado, solo como
-   recordatorio en una línea cuando está por cerrar. Si una palabra clave trae 60 resultados o
-   más, el informe te sugiere afinarla.
-5. **Fichas técnicas** de las cotizaciones UNIQ nuevas: datos del sistema y el extracto del
-   **TDR/EETT** para decidir si cotizar (ítems y cantidades, objetivo, **requisitos del proveedor**,
-   plazo y lugar, pago, adelantos, garantías, penalidades y características técnicas).
-6. **Fuentes**: estado de cada fuente.
+   enlace a la ficha oficial y a las bases. Si una palabra clave trae 60 resultados o más, el
+   informe te sugiere afinarla.
+5. **Regiones que sigues** (si defines `REGIONES`): todo lo abierto en esas regiones o provincias.
+6. **Fichas técnicas** de las cotizaciones UNIQ: datos del sistema y el extracto del **TDR/EETT**
+   para decidir si cotizar (ítems y cantidades, objetivo, **requisitos del proveedor**, plazo y
+   lugar, pago, adelantos, garantías, penalidades y características técnicas).
+7. **Fuentes**: estado de cada fuente.
 
-Lo corto y siempre importante va arriba. Gmail recorta los correos de más de ~102 KB, así que el
-informe tiene un tope: reparte un cupo de filas entre todas las palabras clave y agrega fichas solo
-mientras quepan; las que no entran quedan enlazadas desde la tabla de la UNIQ.
+Por defecto (`INFORME_COMPLETO=si`) todo sale en detalle cada día, aunque el correo sea largo:
+Gmail muestra la primera parte y el resto con "Ver mensaje completo", y por eso lo buscado
+específicamente (UNIQ, entidades, palabras clave) va arriba y las regiones, que son lo más largo,
+después. Con `INFORME_COMPLETO=no` el informe se mantiene bajo el límite de Gmail: lo ya informado
+sale en una línea y solo las cotizaciones UNIQ nuevas llevan ficha.
 
 Fuentes, todas públicas, oficiales y sin login ni captcha:
 
@@ -68,7 +70,21 @@ ENTIDADES=MUNICIPALIDAD PROVINCIAL DE LA CONVENCION
 ```
 
 Basta una parte del nombre, tal como aparece en el SEACE; no importan tildes ni mayúsculas. Varias
-entidades van separadas por coma.
+entidades van separadas por coma. Las contrataciones menores de una entidad salen si su región
+está en `REGIONES`.
+
+## Regiones que sigues
+
+Para ver todo lo abierto en una zona (gobierno regional, municipalidades provinciales y
+distritales, redes de salud, UGEL, universidades, empresas públicas…):
+
+```
+REGIONES=CUSCO,MADRE DE DIOS,APURIMAC/ABANCAY,APURIMAC/COTABAMBAS
+```
+
+`CUSCO` trae todo el departamento; `APURIMAC/ABANCAY` solo esa provincia. Los nombres van como en
+el SEACE (sin importar tildes ni mayúsculas); si uno no existe, la tabla de fuentes lo dice. Lo que
+ya salió en "Entidades que sigues" no se repite aquí.
 
 ## Archivos
 
@@ -79,8 +95,8 @@ entidades van separadas por coma.
 | `seace.py` | búsquedas en SEACE (contrataciones menores y Oportunidades de Negocio) y la regla de coincidencia |
 | `informe.py` | diseño del correo (HTML y texto) |
 | `test_bot.py` | autoprueba sin red: `python test_bot.py` |
-| `.env` | credenciales, palabras clave y entidades (a partir de `.env.example`); permisos 600, **no se versiona** |
-| `data/estado.json` | lo que salió en el informe anterior, para marcar lo nuevo |
+| `.env` | credenciales, palabras clave, entidades y regiones (a partir de `.env.example`); permisos 600, **no se versiona** |
+| `data/estado.json` | lo que salió en el informe anterior (para marcar lo nuevo) y la provincia de cada distrito ya consultado |
 | `logs/bot.log` | log con rotación (1 MB × 3); `logs/cron.err` solo si Python se cae |
 
 Opciones: `--dry-run` imprime el informe en consola sin enviar y `--html-preview` lo guarda en

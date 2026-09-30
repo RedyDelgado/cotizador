@@ -73,4 +73,11 @@ procesos = seace.procesos_oportunidades([fila, dict(fila, detItem="AGREGADO FINO
 assert len(procesos) == 1 and procesos[0]["id"] == "p-7" and procesos[0]["monto"] == 0, procesos
 assert "AGREGADO FINO" in procesos[0]["texto"] and procesos[0]["bases"].endswith("fileCode=abc")
 assert seace.coincide(procesos[0]["texto"], "agregado fino")  # busca también en los ítems
+
+# Tope de tamaño por sección: con muchos procesos nuevos, lo que no entra se cuenta, no se pierde en silencio.
+muchos = [dict(procesos[0], id=f"p-{i}", nuevo=True) for i in range(60)]
+html_chico = informe.html_grupos([("cemento", muchos)], ahora, informe.mostrar, "", cupo={"nuevas_breves": 60},
+                                 max_bytes=8_000)
+assert len(html_chico.encode()) < 12_000 and "nuevos más" in html_chico, len(html_chico)
+assert informe.png_icono("s_regiones")[:4] == b"\x89PNG"
 print("OK")
