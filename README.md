@@ -18,11 +18,25 @@ Todos los días a las 07:00 (hora de Lima) envía **un informe** por correo, con
    lugar, pago, adelantos, garantías, penalidades y características técnicas).
 7. **Fuentes**: estado de cada fuente.
 
-Por defecto (`INFORME_COMPLETO=si`) todo sale en detalle cada día, aunque el correo sea largo:
-Gmail muestra la primera parte y el resto con "Ver mensaje completo", y por eso lo buscado
-específicamente (UNIQ, entidades, palabras clave) va arriba y las regiones, que son lo más largo,
-después. Con `INFORME_COMPLETO=no` el informe se mantiene bajo el límite de Gmail: lo ya informado
-sale en una línea y solo las cotizaciones UNIQ nuevas llevan ficha.
+Por defecto (`INFORME_COMPLETO=si`) todo sale en detalle cada día, aunque el correo sea largo.
+Gmail solo muestra los primeros ~102 KB del cuerpo y esconde el resto detrás de "Ver mensaje
+completo", así que el informe se protege de tres formas:
+
+- **Índice al inicio** ("Resultados por búsqueda"): cada palabra clave, entidad y región con cuántos
+  resultados dio y cuántos son nuevos. Siempre está en la parte visible, así se ve que todas las
+  búsquedas se hicieron aunque el detalle de las últimas quede recortado.
+- **Aviso** arriba cuando el correo pasa del límite.
+- **Adjunto** (`informe-AAAA-MM-DD.html`) con el informe entero, que Gmail no recorta; se abre en
+  el navegador.
+
+Lo buscado específicamente (UNIQ, entidades, palabras clave) va arriba y las regiones, que son lo
+más largo, después. Con `INFORME_COMPLETO=no` el informe se mantiene bajo el límite de Gmail: lo ya
+informado sale en una línea y solo las cotizaciones UNIQ nuevas llevan ficha.
+
+**Ubicación:** cada proceso de SEACE muestra región › provincia › distrito (por ejemplo, *Cusco ›
+La Convención › Santa Ana*): el lugar de entrega de sus ítems y, si falta, el de la entidad. Se
+consulta una vez por proceso y queda guardada en `data/estado.json`, así que cada día solo se
+consulta lo nuevo (la primera vez tarda unos 40 segundos).
 
 Fuentes, todas públicas, oficiales y sin login ni captcha:
 

@@ -16,7 +16,8 @@ Cómo se busca una frase como "sistema de seguridad ciudadana":
 import itertools
 import re
 import unicodedata
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 URL_MENORES = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/buscador"
@@ -192,6 +193,71 @@ def procedimientos_de_entidades(s, entidades, ahora):
     r.raise_for_status()
     procesos = procesos_oportunidades(r.json() or [], ahora)
     return {e: [x for x in procesos if normal(e) in normal(x["entidad"])] for e in entidades}
+
+
+# --------------------------------------------------------------- ubicación
+# Cada fuente guarda el lugar en otro sitio: las contrataciones menores en el detalle de sus ítems
+# ("CUSCO/LA CONVENCION/SANTA ANA") y los procedimientos en la ficha del proceso, ítem por ítem. Se
+# usa el lugar de entrega de los ítems (lo que importa para cotizar) y, si falta, el de la entidad.
+
+URL_DETALLE_MENOR = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/listar-completo"
+DIAS_CACHE_LUGAR = 45  # un proceso sigue abierto 1 o 2 semanas; 45 días da margen de sobra
+
+
+def _lugar_de_menor(s, id_contrato):
+    r = s.get(URL_DETALLE_MENOR, params={"id_contrato": id_contrato}, timeout=60)
+    r.raise_for_status()
+    items = (r.json() or {}).get("uitContratoItemProjectionList") or []
+    return " | ".join(dict.fromkeys(i["nomDistrito"].strip() for i in items if i.get("nomDistrito")))
+
+
+def _lugar_de_proceso(s, id_proceso):
+    r = s.get(URL_FICHA_API.format(id_proceso), timeout=60)
+    r.raise_for_status()
+    ficha = r.json() or {}
+    lugares = ["/".join(i[k].strip() for k in ("departamento", "provincia", "distrito"))
+               for i in ficha.get("listaItems") or [] if i.get("departamento") and i.get("provincia") and i.get("distrito")]
+    if not lugares:  # sin lugar en los ítems: el de la entidad que convoca
+        c = (ficha.get("listaCronograma") or [{}])[0]
+        if c.get("nombreDepartamento") and c.get("nombreProvincia") and c.get("nombreDistrito"):
+            lugares = [f"{c['nombreDepartamento']}/{c['nombreProvincia']}/{c['nombreDistrito']}"]
+    return " | ".join(dict.fromkeys(lugares))
+
+
+def completar_lugares(s, procesos, cache, ahora, log=None):
+    """Pone x["lugar"] ("CUSCO/LA CONVENCION/SANTA ANA", o varios separados por " | ") a cada proceso de
+    SEACE. cache = {id: {"l": lugar, "v": última vez visto}} se guarda en estado.json: cada día solo se
+    consulta lo que no se había visto. Una consulta que falla deja el lugar vacío; no rompe el informe."""
+    hoy = f"{ahora:%Y-%m-%d}"
+    pendientes = {}
+    for x in procesos:
+        if x["fuente"] != "SEACE":
+            continue
+        guardado = cache.get(x["id"])
+        if guardado:
+            guardado["v"] = hoy
+            x["lugar"] = guardado["l"]
+        else:
+            pendientes.setdefault(x["id"], []).append(x)
+
+    def buscar(id_):
+        numero = id_.split("-", 1)[1]
+        try:
+            return id_, (_lugar_de_menor if id_.startswith("m-") else _lugar_de_proceso)(s, numero)
+        except Exception as e:
+            if log:
+                log.warning("No se pudo leer la ubicación de %s: %s", id_, e)
+            return id_, None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:  # pocas conexiones a la vez: son portales públicos
+        for id_, lugar in pool.map(buscar, pendientes):
+            for x in pendientes[id_]:
+                x["lugar"] = lugar or ""
+            if lugar:
+                cache[id_] = {"l": lugar, "v": hoy}
+    limite = f"{ahora - timedelta(days=DIAS_CACHE_LUGAR):%Y-%m-%d}"
+    for id_ in [k for k, v in cache.items() if v["v"] < limite]:
+        del cache[id_]
 
 
 # -------------------------------------------------------------- regiones

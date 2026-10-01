@@ -52,6 +52,7 @@ GLIFOS = {
     "file-text": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
     "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
     "map-pin": '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
     "building-2": '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
     "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>',
     "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
@@ -71,6 +72,8 @@ ICONOS = {
     "s_coinc": ("search", C["navy"]),
     "s_entidades": ("building-2", C["navy"]),
     "s_regiones": ("map-pin", C["navy"]),
+    "pin": ("map-pin", C["azul"]),
+    "pin_aviso": ("info", C["enlace"]),
     "s_uniq": ("landmark", C["navy"]),
     "s_fichas": ("file-text", C["navy"]),
     "s_fuentes": ("database", C["navy"]),
@@ -248,14 +251,26 @@ def tabla(cabeceras, filas):
             + (f'<tr>{th}</tr>' if th else "") + f'{filas}</table>')
 
 
-def fila(i, titulo, url, etiquetas, detalle, fecha, pie_fecha, urgente=False, extra=""):
-    """Fila de oportunidad: título (enlace), etiquetas y detalle; a la derecha la fecha."""
+def nombre_lugar(lugar):
+    """"CUSCO/LA CONVENCION/SANTA ANA" -> "Cusco › La Convención › Santa Ana" (varios lugares: separados por " | ")."""
+    return " | ".join(" › ".join(nombre_propio(p) for p in sitio.split("/")) for sitio in (lugar or "").split(" | ") if sitio)
+
+
+def linea_lugar(lugar):
+    if not lugar:
+        return ""
+    return (f'<div style="font-size:12px;line-height:18px;color:{C["cuerpo"]};font-weight:600;margin-top:2px">'
+            f'{img("pin", 12, "display:inline-block;vertical-align:-1px;margin-right:4px")}{h(nombre_lugar(lugar))}</div>')
+
+
+def fila(i, titulo, url, etiquetas, detalle, fecha, pie_fecha, urgente=False, extra="", lugar=""):
+    """Fila de oportunidad: título (enlace), etiquetas, ubicación y detalle; a la derecha la fecha."""
     borde = f"border-top:1px solid {C['linea']};" if i else ""
     enlace = (f'<a href="{h(url)}" style="color:{C["texto"]};text-decoration:none">{h(titulo)}</a>' if url else h(titulo))
     color = C["rojo"] if urgente else C["texto"]
     return (f'<tr><td valign="top" style="{borde}padding:12px">'
             f'<div style="font-size:14px;line-height:20px;font-weight:600;color:{C["texto"]}">{enlace}</div>'
-            f'<div style="margin-top:6px">{etiquetas}</div>'
+            f'<div style="margin-top:6px">{etiquetas}</div>{linea_lugar(lugar)}'
             f'<div style="font-size:12px;line-height:18px;color:{C["suave"]}">{h(detalle)}</div>{extra}</td>'
             f'<td valign="top" align="right" style="{borde}padding:12px;white-space:nowrap;text-align:right">'
             f'<div style="font-size:13px;line-height:20px;font-weight:600;color:{color}">{h(fecha)}</div>'
@@ -369,11 +384,53 @@ def detalle_proceso(x):
                                     f'S/ {x["monto"]:,.0f}' if x["monto"] else ""]))
 
 
+def fila_proceso(i, x, ahora):
+    return fila(i, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora), detalle_proceso(x),
+                *fecha_proceso(x, ahora), extra=enlace_bases(x), lugar=x.get("lugar"))
+
+
 def enlace_bases(x):
     if not x.get("bases"):
         return ""
     return (f'<div style="margin-top:4px;font-size:12px;line-height:18px"><a href="{h(x["bases"])}" '
             f'style="color:{C["enlace"]};text-decoration:none;font-weight:600">Descargar bases</a></div>')
+
+
+def html_indice(bloques):
+    """Índice al inicio del informe: una fila por búsqueda con cuántos resultados dio y cuántos son nuevos.
+    Está en la parte que Gmail siempre muestra, así se ve que TODAS las búsquedas se hicieron aunque el
+    detalle de las últimas quede en la parte recortada. bloques = [(rótulo, [(nombre, [procesos])])]."""
+    filas = ""
+    for rotulo, grupos in bloques:
+        if not grupos:
+            continue
+        filas += (f'<tr><td colspan="3" style="{"border-top:1px solid " + C["linea"] + ";" if filas else ""}'
+                  f'background:{C["cabecera"]};padding:6px 12px;font-size:11px;line-height:16px;font-weight:600;'
+                  f'letter-spacing:0.06em;color:{C["suave"]}">{h(rotulo.upper())}</td></tr>')
+        for nombre, items in grupos:
+            nuevos = sum(x["nuevo"] for x in items)
+            filas += (f'<tr><td style="border-top:1px solid {C["linea"]};padding:6px 12px;font-size:13px;line-height:18px;'
+                      f'color:{C["texto"]}">{h(nombre)}</td>'
+                      f'<td align="right" style="border-top:1px solid {C["linea"]};padding:6px 12px;text-align:right;'
+                      f'font-size:13px;font-weight:600;color:{C["texto"]}">{len(items)}</td>'
+                      f'<td align="right" style="border-top:1px solid {C["linea"]};padding:6px 12px;text-align:right;'
+                      f'font-size:13px;font-weight:600;color:{C["azul"] if nuevos else C["suave"]}">{nuevos}</td></tr>')
+    if not filas:
+        return ""
+    return (f'<div style="margin-top:18px;font-size:13px;line-height:18px;font-weight:700;color:{C["navy"]}">'
+            f'Resultados por búsqueda</div>'
+            + tabla([("Búsqueda", "left"), ("Abiertos", "right"), ("Nuevos", "right")], filas))
+
+
+def aviso_largo():
+    """Aviso arriba del correo cuando pasa del límite de Gmail, que muestra solo el inicio."""
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px;'
+            f'background:{C["azul_tinta"]};border:1px solid {C["azul_borde"]};border-radius:6px"><tr>'
+            f'<td width="30" valign="top" style="padding:11px 0 0 12px">{img("pin_aviso", 16)}</td>'
+            f'<td style="padding:10px 12px;font-size:13px;line-height:19px;color:{C["enlace"]}">'
+            f'<b>Este informe es largo.</b> Gmail muestra solo el inicio: al final del correo pulsa '
+            f'<b>«Ver mensaje completo»</b>, o abre el <b>archivo adjunto</b> (se abre en el navegador), que lo trae entero.'
+            f'</td></tr></table>')
 
 
 def repartir(items, ahora):
@@ -389,9 +446,10 @@ def fila_breve(x, ahora, primera=False):
     fecha, _, urgente = fecha_proceso(x, ahora)
     borde = "" if primera else f"border-top:1px solid {C['linea']};"
     marca = etiqueta("NUEVO", "azul") if x["nuevo"] else ""
+    lugar = f" · {nombre_lugar(x['lugar'])}" if x.get("lugar") else ""
     return (f'<tr><td style="{borde}padding:8px 12px;font-size:13px;line-height:18px">{marca}'
             f'<a href="{h(x["url"])}" style="color:{C["texto"]};text-decoration:none">{h(recortar(oracion(x["titulo"]), 90))}</a>'
-            f'<div style="font-size:12px;line-height:16px;color:{C["suave"]}">{h(nombre_propio(x["entidad"]))}</div></td>'
+            f'<div style="font-size:12px;line-height:16px;color:{C["suave"]}">{h(nombre_propio(x["entidad"]))}{h(lugar)}</div></td>'
             f'<td align="right" valign="top" style="{borde}padding:8px 12px;white-space:nowrap;text-align:right;font-size:13px;'
             f'line-height:18px;font-weight:600;color:{C["rojo"] if urgente else C["texto"]}">{h(fecha)}</td></tr>')
 
@@ -407,9 +465,7 @@ def html_grupos_completo(grupos, ahora, titulo, vacio, amplia=None):
     por primera vez). El correo puede pasar los ~102 KB: Gmail muestra "Ver mensaje completo"."""
     salida = ""
     for nombre, items in grupos:
-        filas = "".join(fila(i, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
-                             detalle_proceso(x), *fecha_proceso(x, ahora), extra=enlace_bases(x))
-                        for i, x in enumerate(items))
+        filas = "".join(fila_proceso(i, x, ahora) for i, x in enumerate(items))
         if amplia and len(items) >= amplia:
             filas += fila_nota(f"Esta palabra clave es muy general ({len(items)} resultados): hazla más específica "
                                f"o ponla entre comillas junto a otra palabra.")
@@ -442,8 +498,7 @@ def html_grupos(grupos, ahora, titulo, vacio, cupo=None, amplia=None, max_bytes=
         for x in nuevos:
             if completas >= min(MAX_FILAS, cupo["completas"]):
                 break
-            f = fila(completas, recortar(oracion(x["titulo"]), 140), x["url"], etiquetas_proceso(x, ahora),
-                     detalle_proceso(x), *fecha_proceso(x, ahora), extra=enlace_bases(x))
+            f = fila_proceso(completas, x, ahora)
             if not cabe(f):
                 break
             filas, usados, completas = filas + f, usados + len(f.encode()), completas + 1
@@ -656,6 +711,9 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     cifras += [(len(convs or []), "UNIQ activas", False)] if con_uniq else []
     cuerpo += indicadores(cifras)
     cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
+    cuerpo += "<!--LARGO-->" + html_indice([("Palabras clave", [(mostrar(n), i) for n, i in grupos]),
+                                            ("Entidades", [(nombre_propio(n), i) for n, i in seguidas]),
+                                            ("Regiones", [(nombre_zona(n), i) for n, i in zonas])])
 
     # Primero lo corto y siempre importante (UNIQ y entidades); después lo que puede crecer mucho
     # (coincidencias y fichas), así lo que Gmail llegara a cortar es lo menos urgente.
@@ -725,6 +783,7 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
 
+    cuerpo = cuerpo.replace("<!--LARGO-->", aviso_largo() if len(cuerpo.encode()) > LIMITE_HTML else "")
     texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas, zonas, completo, con_uniq)
     return asunto, texto, envolver(cuerpo, "Informe de oportunidades")
 
@@ -743,6 +802,8 @@ def texto_grupos(grupos, ahora, titulo, completo=True):
             fecha, pie, _ = fecha_proceso(x, ahora)
             lineas += [f"  {'[NUEVO] ' if x['nuevo'] else ''}{oracion(x['titulo'])}",
                        f"    {x['fuente']} · {x['tipo']} · {detalle_proceso(x)} · {pie}: {fecha}", f"    {x['url']}"]
+            if x.get("lugar"):
+                lineas.append(f"    Ubicación: {nombre_lugar(x['lugar'])}")
             if x.get("bases"):
                 lineas.append(f"    Bases: {x['bases']}")
     return lineas

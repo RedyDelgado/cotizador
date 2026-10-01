@@ -260,7 +260,7 @@ def buscar_entidades(s, ahora, entidades, estado, fuentes):
 
 # --------------------------------------------------------------------- envío
 
-def enviar(asunto, texto, cuerpo_html, destinos):
+def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjunto="informe.html"):
     faltan = [k for k in ("SMTP_USER", "SMTP_PASS") if not os.environ.get(k)]
     if faltan:
         raise RuntimeError(f"Faltan variables en .env: {', '.join(faltan)}")
@@ -278,6 +278,8 @@ def enviar(asunto, texto, cuerpo_html, destinos):
     for nombre in sorted(set(re.findall(r"cid:ico-([\w-]+)", cuerpo_html))):  # iconos usados, una vez cada uno
         parte_html.add_related(informe.png_icono(nombre), "image", "png", cid=f"<ico-{nombre}>",
                                disposition="inline", filename=f"{nombre}.png")
+    if adjunto_html:  # el informe entero como archivo: Gmail recorta el cuerpo del correo, no los adjuntos
+        msg.add_attachment(adjunto_html.encode("utf-8"), maintype="text", subtype="html", filename=nombre_adjunto)
 
     with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
         smtp.starttls()
@@ -371,6 +373,9 @@ def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
     en_entidades = {x["id"] for _, items in seguidas for x in items}
     zonas = [(z, [x for x in items if x["id"] not in en_entidades]) for z, items in zonas]
     seace_ids |= en_entidades | {x["id"] for _, items in zonas for x in items}
+    # Ubicación (región › provincia › distrito) de todo lo que sale en el informe; se guarda en el estado.
+    todos = [x for _, items in grupos + seguidas + zonas for x in items]
+    seace.completar_lugares(s, todos, estado.setdefault("lugares", {}), ahora, log)
 
     if fuentes and all(not ok for _, ok, _, _ in fuentes):
         raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
@@ -439,7 +444,9 @@ def main():
                 if args.dry_run:
                     print(f"=== PERFIL {perfil['nombre']} → {', '.join(perfil['correos'])}\n{asunto}\n\n{texto}\n")
                 if not sin_envio:
-                    enviar(asunto, texto, cuerpo, perfil["correos"])
+                    largo = len(cuerpo.encode()) > informe.LIMITE_HTML
+                    enviar(asunto, texto, cuerpo, perfil["correos"],
+                           informe.con_data_uri(cuerpo) if largo else None, f"informe-{ahora:%Y-%m-%d}.html")
                     # Solo tras enviar: si falla, mañana siguen como nuevos. Si una fuente cayó, se conserva lo
                     # visto antes para no volver a marcar como nuevo lo que ya salió.
                     propio = estado_de(estado, perfil)

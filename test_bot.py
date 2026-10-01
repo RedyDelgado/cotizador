@@ -157,6 +157,82 @@ try:
 finally:
     bot.requests.Session.get = get_real
 
+# Ubicación: formato, consulta por ítem, caché (no repite lo visto), poda y fallas sin romper el informe.
+assert informe.nombre_lugar("CUSCO/LA CONVENCION/SANTA ANA") == "Cusco › La Convencion › Santa Ana"
+assert informe.nombre_lugar("CUSCO/CUSCO/CUSCO | APURIMAC/ABANCAY/ABANCAY") == "Cusco › Cusco › Cusco | Apurimac › Abancay › Abancay"
+assert informe.nombre_lugar("") == "" and informe.nombre_lugar(None) == ""
+
+
+class Resp:
+    def __init__(self, datos):
+        self.datos = datos
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.datos
+
+
+consultas = []
+
+
+class SesionFalsa:
+    def get(self, url, params=None, **kw):
+        consultas.append(url)
+        if "listar-completo" in url:
+            if str(params["id_contrato"]) == "666":
+                raise RuntimeError("portal caído")
+            return Resp({"uitContratoItemProjectionList": [{"nomDistrito": "CUSCO/LA CONVENCION/SANTA ANA"},
+                                                            {"nomDistrito": "CUSCO/LA CONVENCION/SANTA ANA"}]})
+        return Resp({"listaItems": [{"departamento": "APURIMAC", "provincia": "ANDAHUAYLAS", "distrito": "SAN JERONIMO"}],
+                     "listaCronograma": [{"nombreDepartamento": "APURIMAC", "nombreProvincia": "ABANCAY", "nombreDistrito": "ABANCAY"}]})
+
+
+def p(id_, fuente="SEACE"):
+    return {"id": id_, "fuente": fuente}
+
+
+cache = {"p-viejo": {"l": "X/Y/Z", "v": "2026-01-01"}, "m-5": {"l": "PUNO/PUNO/PUNO", "v": "2026-09-01"}}
+lista = [p("m-1"), p("p-2"), p("m-5"), p("m-666"), p("u-9", "UNIQ")]
+seace.completar_lugares(SesionFalsa(), lista, cache, ahora)
+assert lista[0]["lugar"] == "CUSCO/LA CONVENCION/SANTA ANA"            # varios ítems del mismo lugar: uno solo
+assert lista[1]["lugar"] == "APURIMAC/ANDAHUAYLAS/SAN JERONIMO"        # procesos: el lugar del ítem, no el de la entidad
+assert lista[2]["lugar"] == "PUNO/PUNO/PUNO" and cache["m-5"]["v"] == "2026-09-28"  # desde la caché, sin consultar
+assert lista[3]["lugar"] == "" and "m-666" not in cache                 # falla: sin lugar y sin guardarlo
+assert "lugar" not in lista[4] and "p-viejo" not in cache and len(consultas) == 3  # UNIQ no se toca; poda >45 días
+consultas.clear()
+seace.completar_lugares(SesionFalsa(), [p("m-1"), p("p-2")], cache, ahora)
+assert consultas == [] and set(cache) == {"m-1", "p-2", "m-5"}
+
+# Índice por búsqueda y aviso de correo largo.
+casos = [("cemento", [dict(procesos[0], nuevo=True), dict(procesos[0], id="p-2", nuevo=False)]), ("fierro", [])]
+indice = informe.html_indice([("Palabras clave", casos), ("Entidades", [])])
+assert "Resultados por búsqueda" in indice and ">cemento<" in indice and ">fierro<" in indice and "ENTIDADES" not in indice
+assert informe.html_indice([("Palabras clave", [])]) == ""
+
+# El correo largo lleva el informe entero como adjunto; el corto, no.
+enviados = []
+
+
+class SMTPFalso:
+    def __init__(self, *a, **k): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def starttls(self): pass
+    def login(self, u, c): pass
+    def send_message(self, m): enviados.append(m)
+
+
+bot.smtplib.SMTP = SMTPFalso
+os.environ.update(SMTP_USER="u@gmail.com", SMTP_PASS="a b")
+bot.enviar("asunto", "texto", '<p>hola <img src="cid:ico-pin"></p>', ["a@x.com"])
+bot.enviar("asunto", "texto", '<p>hola <img src="cid:ico-pin"></p>', ["a@x.com"], "<html>entero</html>", "informe-2026-09-28.html")
+corto, largo = enviados
+assert [x.get_filename() for x in corto.iter_attachments()] == []
+assert [x.get_filename() for x in largo.iter_attachments()] == ["informe-2026-09-28.html"]
+assert largo.get_body(("html",)).get_content().startswith("<p>hola")  # el cuerpo sigue siendo el HTML con iconos
+
 # Informe sin UNIQ ni palabras clave (alguien que solo sigue una entidad): sin secciones vacías.
 proceso = {"id": "p-1", "fuente": "SEACE", "tipo": "Licitación Pública", "titulo": "ADQUISICION DE CEMENTO", "entidad": "MUNICIPALIDAD DISTRITAL DE ECHARATI",
            "codigo": "LP-1", "url": "https://x/1", "bases": None, "cierre": datetime(2026, 10, 5, 23, 59, tzinfo=uniq.LIMA),
