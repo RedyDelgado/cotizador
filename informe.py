@@ -390,10 +390,18 @@ def fila_proceso(i, x, ahora):
 
 
 def enlace_bases(x):
-    if not x.get("bases"):
+    """Enlaces de una fila: las bases y, en los procedimientos, el buscador de SEACE 3.0 (valor referencial
+    e historial), donde se pega la nomenclatura que sale en la fila."""
+    estilo = f'style="color:{C["enlace"]};text-decoration:none;font-weight:600"'
+    enlaces = []
+    if x.get("bases"):
+        enlaces.append(f'<a href="{h(x["bases"])}" {estilo}>Descargar bases</a>')
+    if x["id"].startswith("p-") and x.get("codigo"):
+        enlaces.append(f'<a href="{h(seace.BUSCADOR_SEACE3)}" {estilo}>Buscar {h(x["codigo"])} en SEACE 3.0</a>')
+    if not enlaces:
         return ""
-    return (f'<div style="margin-top:4px;font-size:12px;line-height:18px"><a href="{h(x["bases"])}" '
-            f'style="color:{C["enlace"]};text-decoration:none;font-weight:600">Descargar bases</a></div>')
+    return (f'<div style="margin-top:4px;font-size:12px;line-height:18px">'
+            f'{" &nbsp;·&nbsp; ".join(enlaces)}</div>')
 
 
 def html_indice(bloques):
@@ -806,6 +814,8 @@ def texto_grupos(grupos, ahora, titulo, completo=True):
                 lineas.append(f"    Ubicación: {nombre_lugar(x['lugar'])}")
             if x.get("bases"):
                 lineas.append(f"    Bases: {x['bases']}")
+            if x["id"].startswith("p-") and x.get("codigo"):
+                lineas.append(f"    Valor referencial e historial: {seace.BUSCADOR_SEACE3} (buscar {x['codigo']})")
     return lineas
 
 

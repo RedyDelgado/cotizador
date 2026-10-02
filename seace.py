@@ -31,6 +31,9 @@ URL_FICHA_API = "https://prod4.seace.gob.pe:8086/api/oportunidades/fichaProceso/
 FICHA_PROCESO = "https://prod4.seace.gob.pe/openegocio/#/ficha/idProceso/{}"
 URL_BASES = "https://prod1.seace.gob.pe/SeaceWeb-PRO/SdescargarArchivoAlfresco?fileCode={}"
 PORTAL_OPORTUNIDADES = "https://prod4.seace.gob.pe/openegocio/"
+# Buscador de SEACE 3.0: trae valor referencial e historial, pero tiene reCAPTCHA (se usa a mano) y no
+# admite la búsqueda por la dirección: se abre la página y se pega la nomenclatura.
+BUSCADOR_SEACE3 = "https://prod2.seace.gob.pe/seacebus-uiwd-pub/buscadorPublico/buscadorPublico.xhtml"
 VACIAS ={"de", "del", "la", "las", "el", "los", "y", "e", "o", "u", "para", "por", "en", "con", "a", "al", "un", "una"}
 
 

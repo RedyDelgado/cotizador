@@ -211,6 +211,11 @@ indice = informe.html_indice([("Palabras clave", casos), ("Entidades", [])])
 assert "Resultados por búsqueda" in indice and ">cemento<" in indice and ">fierro<" in indice and "ENTIDADES" not in indice
 assert informe.html_indice([("Palabras clave", [])]) == ""
 
+# Enlaces de cada fila: bases y buscador de SEACE 3.0 solo en procedimientos (no en contrataciones menores).
+enlaces = informe.enlace_bases(procesos[0])
+assert "Descargar bases" in enlaces and "Buscar SIE-SIE-1-2026-X-1 en SEACE 3.0" in enlaces and "prod2.seace" in enlaces
+assert "SEACE 3.0" not in informe.enlace_bases(dict(procesos[0], id="m-5")) and informe.enlace_bases(dict(procesos[0], id="m-5", bases=None)) == ""
+
 # El correo largo lleva el informe entero como adjunto; el corto, no.
 enviados = []
 
