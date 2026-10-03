@@ -259,6 +259,19 @@ assert [x["id"] for x in g2[1][1]] == []  # un proceso que calza con dos frases 
 g3, _ = bot.coincidencias_en_regiones(["cemento"], [], {}, [])  # sin candidatos: nada, y no se busca en todo el país
 assert g3 == [("cemento", [])]
 
+# Marca: el logo existe, el encabezado lo usa, viaja incrustado en el correo y el informe sale igual sin él.
+logo = informe.logo_png()
+assert logo and logo[:4] == b"\x89PNG" and len(logo) < 80_000, "assets/logo.png"
+encabezado_html = informe.marca("Informe", ahora)
+assert 'src="cid:logo"' in encabezado_html and 'alt="NEOESTADO"' in encabezado_html
+assert "data:image/png;base64," in informe.con_data_uri(encabezado_html) and "cid:logo" not in informe.con_data_uri(encabezado_html)
+enviados.clear()
+bot.enviar("a", "t", encabezado_html, ["a@x.com"])
+assert "logo.png" not in str(enviados[0]) and any(p.get("Content-ID") == "<logo>" for p in enviados[0].walk())
+logo_real, informe.logo_png = informe.logo_png, lambda: None  # sin archivo de logo
+assert "cid:logo" not in informe.marca("Informe", ahora) and "MONITOR DE CONTRATACIONES" in informe.marca("Informe", ahora)
+informe.logo_png = logo_real
+
 # Informe sin UNIQ ni palabras clave (alguien que solo sigue una entidad): sin secciones vacías.
 proceso = {"id": "p-1", "fuente": "SEACE", "tipo": "Licitación Pública", "titulo": "ADQUISICION DE CEMENTO", "entidad": "MUNICIPALIDAD DISTRITAL DE ECHARATI",
            "codigo": "LP-1", "url": "https://x/1", "bases": None, "cierre": datetime(2026, 10, 5, 23, 59, tzinfo=uniq.LIMA),

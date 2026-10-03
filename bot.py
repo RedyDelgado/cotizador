@@ -294,6 +294,9 @@ def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjun
     for nombre in sorted(set(re.findall(r"cid:ico-([\w-]+)", cuerpo_html))):  # iconos usados, una vez cada uno
         parte_html.add_related(informe.png_icono(nombre), "image", "png", cid=f"<ico-{nombre}>",
                                disposition="inline", filename=f"{nombre}.png")
+    logo = informe.logo_png()
+    if logo and "cid:logo" in cuerpo_html:  # el logo de la marca, incrustado como los iconos
+        parte_html.add_related(logo, "image", "png", cid="<logo>", disposition="inline", filename="neoestado.png")
     if adjunto_html:  # el informe entero como archivo: Gmail recorta el cuerpo del correo, no los adjuntos
         msg.add_attachment(adjunto_html.encode("utf-8"), maintype="text", subtype="html", filename=nombre_adjunto)
 

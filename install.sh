@@ -50,6 +50,8 @@ fi
 
 echo "== 3. Archivos =="
 install -d -o "$USR" -g "$USR" -m 750 "$APP" "$APP/data" "$APP/logs"
+install -d -o "$USR" -g "$USR" -m 750 "$APP/assets"
+install -o "$USR" -g "$USR" -m 640 "$SRC"/assets/logo.png "$APP/assets/"
 install -o "$USR" -g "$USR" -m 640 "$SRC"/{bot.py,uniq.py,seace.py,informe.py,test_bot.py,requirements.txt,README.md,.env.example,perfiles.ini.example} "$APP/"
 if [[ ! -f $APP/.env ]]; then
   if [[ -f $SRC/.env ]]; then

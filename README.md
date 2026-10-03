@@ -50,8 +50,12 @@ El buscador clásico de SEACE 3.0 tiene reCAPTCHA, así que no se usa.
 Si una fuente no responde, el informe sale igual con un aviso de "informe incompleto". Si no
 responde ninguna, llega un correo de **alerta**. Si un día no hay nada, igual llega el informe.
 
+Marca: el informe lleva el logo de NEOESTADO (`assets/logo.png`, se incrusta en el correo) y una
+paleta violeta que combina con él. Para cambiar el logo, reemplaza ese archivo (PNG cuadrado, unos
+360 px); si falta, el informe sale igual, sin logo.
+
 Diseño: informe institucional (encabezado, secciones numeradas, tablas de datos, etiquetas de
-estado) con la paleta de Tailwind (navy, blue y gray, contraste AA) e iconos Lucide, los mismos de
+estado) con la paleta de Tailwind (violeta y gris, contraste AA) e iconos Lucide, los mismos de
 `lucide-react`. Sin emojis. Un correo no ejecuta React ni Tailwind y Gmail descarta clases y SVG,
 así que los estilos van en línea y los iconos se adjuntan como PNG.
 

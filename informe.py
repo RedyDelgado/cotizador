@@ -10,6 +10,8 @@ import base64
 import functools
 import html
 import re
+from pathlib import Path
+
 import pymupdf
 
 import seace
@@ -24,13 +26,15 @@ CUPO_BREVES = 20       # recordatorios de una línea entre todas las palabras cl
 MUY_GENERAL = 60       # desde cuántos resultados se sugiere afinar una palabra clave
 
 FUENTE = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
-# Contraste WCAG sobre blanco: texto 17:1, cuerpo 10:1, suave 4.8:1, enlace 8.6:1, rojo 6.5:1.
+# Paleta de la marca NEOESTADO: violeta (Tailwind violet) con el morado del logo como acento.
+# Contraste WCAG sobre blanco: texto 17:1, cuerpo 10:1, suave 4.8:1, enlace 9.3:1, acento 7.1:1, rojo 6.5:1.
+# Los nombres "azul*" se conservan del diseño anterior; ahora son violeta.
 C = {
-    "navy": "#0B2545",        # títulos y barra superior
-    "azul": "#1D4ED8",        # blue-700: botones, iconos de ficha
-    "enlace": "#1E40AF",      # blue-800: enlaces y etiquetas
-    "azul_tinta": "#EFF6FF",  # blue-50
-    "azul_borde": "#BFDBFE",  # blue-200
+    "navy": "#2E1065",        # violet-950: títulos y barra superior
+    "azul": "#6D28D9",        # violet-700: botones e iconos
+    "enlace": "#5B21B6",      # violet-800: enlaces y etiquetas (el morado del logo)
+    "azul_tinta": "#F5F3FF",  # violet-50
+    "azul_borde": "#DDD6FE",  # violet-200
     "texto": "#111827",       # gray-900
     "cuerpo": "#374151",      # gray-700
     "suave": "#6B7280",       # gray-500
@@ -106,10 +110,23 @@ def img(nombre, px, estilo="display:block"):
     return f'<img src="cid:ico-{nombre}" width="{px}" height="{px}" alt="" style="{estilo};border:0">'
 
 
+LOGO = Path(__file__).resolve().parent / "assets" / "logo.png"
+
+
+def logo_png():
+    """Bytes del logo (assets/logo.png), o None si no está: el informe sale igual, sin logo."""
+    try:
+        return LOGO.read_bytes()
+    except OSError:
+        return None
+
+
 def con_data_uri(cuerpo_html):
-    """Para preview.html: el navegador no entiende cid:, se incrustan los PNG en base64."""
-    return re.sub(r"cid:ico-([\w-]+)", lambda m: "data:image/png;base64," +
-                  base64.b64encode(png_icono(m.group(1))).decode(), cuerpo_html)
+    """Para preview.html y el adjunto: el navegador no entiende cid:, se incrustan los PNG en base64."""
+    cuerpo_html = re.sub(r"cid:ico-([\w-]+)", lambda m: "data:image/png;base64," +
+                         base64.b64encode(png_icono(m.group(1))).decode(), cuerpo_html)
+    logo = logo_png()
+    return cuerpo_html.replace("cid:logo", "data:image/png;base64," + base64.b64encode(logo).decode()) if logo else cuerpo_html
 
 
 # -------------------------------------------------------------------- texto
@@ -309,13 +326,19 @@ def envolver(cuerpo, titulo):
 # ---------------------------------------------------------- partes del informe
 
 def marca(titulo, ahora):
-    """Encabezado institucional: nombre del producto, título del documento y fecha de emisión."""
-    return (f'<div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.12em;color:{C["azul"]}">'
-            f'MONITOR DE CONTRATACIONES PÚBLICAS</div>'
-            f'<div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-0.3px;color:{C["navy"]};'
-            f'margin-top:6px">{h(titulo)}</div>'
-            f'<div style="font-size:13px;line-height:19px;color:{C["suave"]};margin-top:4px">'
-            f'{h(fecha_larga(ahora))} · Emitido a las {ahora:%H:%M} (hora de Lima)</div>')
+    """Encabezado de la marca: logo NEOESTADO, nombre del producto, título del documento y fecha."""
+    texto = (f'<div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.12em;color:{C["azul"]}">'
+             f'MONITOR DE CONTRATACIONES</div>'
+             f'<div style="font-size:21px;line-height:26px;font-weight:700;letter-spacing:-0.3px;color:{C["navy"]};'
+             f'margin-top:5px">{h(titulo)}</div>'
+             f'<div style="font-size:13px;line-height:19px;color:{C["suave"]};margin-top:4px">'
+             f'{h(fecha_larga(ahora))} · Emitido a las {ahora:%H:%M} (hora de Lima)</div>')
+    if not logo_png():
+        return texto
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+            f'<td width="100" valign="middle" style="padding-right:14px">'
+            f'<img src="cid:logo" width="86" height="86" alt="NEOESTADO" style="display:block;border:0"></td>'
+            f'<td valign="middle">{texto}</td></tr></table>')
 
 
 def encabezado(ahora, palabras, entidades, zonas=()):
@@ -347,18 +370,26 @@ def aviso_fuentes(fuentes):
 
 
 def indicadores(cifras):
-    """Fila de indicadores del resumen ejecutivo: [(número, etiqueta, urgente)]."""
-    celdas = ""
-    for i, (n, texto, urgente) in enumerate(cifras):
-        borde = f"border-left:1px solid {C['linea']};" if i else ""
-        color = C["rojo"] if urgente and n else C["navy"]
-        celdas += (f'<td width="{100 // len(cifras)}%" valign="top" style="{borde}padding:14px 12px">'
-                   f'<div style="font-size:26px;line-height:30px;font-weight:700;color:{color}">{n}</div>'
-                   f'<div style="font-size:11px;line-height:15px;font-weight:600;letter-spacing:0.04em;color:{C["suave"]};'
-                   f'margin-top:4px;text-transform:uppercase">{h(texto)}</div></td>')
+    """Indicadores del resumen ejecutivo: [(número, etiqueta, urgente)]. Hasta 3 por fila, repartidos
+    parejo (4 -> 2+2, 5 -> 3+2): en un celular, 5 en una fila no caben y se salen de la pantalla."""
+    filas_n = -(-len(cifras) // 3)
+    por_fila = -(-len(cifras) // filas_n)
+    filas = ""
+    for r in range(filas_n):
+        grupo = cifras[r * por_fila:(r + 1) * por_fila]
+        celdas = ""
+        for i, (n, texto, urgente) in enumerate(grupo):
+            borde = f"border-left:1px solid {C['linea']};" if i else ""
+            color = C["rojo"] if urgente and n else C["navy"]
+            celdas += (f'<td width="{100 // por_fila}%" valign="top" style="{borde}padding:13px 12px">'
+                       f'<div style="font-size:26px;line-height:30px;font-weight:700;color:{color}">{n}</div>'
+                       f'<div style="font-size:11px;line-height:15px;font-weight:600;letter-spacing:0.04em;color:{C["suave"]};'
+                       f'margin-top:4px;text-transform:uppercase">{h(texto)}</div></td>')
+        borde_fila = f"border-top:1px solid {C['linea']}" if r else ""
+        filas += (f'<tr><td style="{borde_fila}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                  f'style="table-layout:fixed"><tr>{celdas}</tr></table></td></tr>')
     return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {C["linea"]};'
-            f'border-radius:8px;border-collapse:separate;border-spacing:0">'
-            f'<tr>{celdas}</tr></table>')
+            f'border-radius:8px;border-collapse:separate;border-spacing:0">{filas}</table>')
 
 
 def fecha_proceso(x, ahora):
