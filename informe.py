@@ -1,7 +1,7 @@
 """Diseño del informe diario: HTML para correo y su versión en texto plano.
 
 Formato de informe profesional: encabezado institucional, resumen ejecutivo con indicadores,
-tablas de datos con cabecera, etiquetas de estado y fichas técnicas. Paleta de Tailwind CSS
+tablas de datos con cabecera, etiquetas de estado y resúmenes. Paleta de Tailwind CSS
 (navy/blue para el acento, gray para neutros), iconos Lucide (los mismos de lucide-react) y
 nada de emojis. Todo va en línea: Gmail descarta <style>, clases y SVG, por eso los iconos
 viajan como PNG adjuntos.
@@ -16,7 +16,6 @@ import seace
 import uniq
 
 DIAS_ALERTA = 2   # "cierra pronto" si quedan 2 días o menos
-MAX_ITEMS = 15    # ítems del TDR por ficha
 MAX_FILAS = 15    # filas por palabra clave o entidad
 # Gmail recorta el HTML arriba de ~102 KB y lo que queda abajo solo se ve con "Ver mensaje completo".
 LIMITE_HTML = 95_000   # margen para el envoltorio del correo
@@ -75,7 +74,6 @@ ICONOS = {
     "pin": ("map-pin", C["azul"]),
     "pin_aviso": ("info", C["enlace"]),
     "s_uniq": ("landmark", C["navy"]),
-    "s_fichas": ("file-text", C["navy"]),
     "s_fuentes": ("database", C["navy"]),
     "aviso": ("triangle-alert", C["rojo"]),
     "abrir": ("external-link", BLANCO),
@@ -575,82 +573,6 @@ def html_uniq(convs, ahora, completo=True):
     return tabla([("Cotización", "left"), ("Vence", "right")], filas)
 
 
-def html_parrafos(texto):
-    """Texto del PDF -> HTML: los renglones cortos en mayúsculas pasan a subtítulo."""
-    partes = []
-    for linea in texto.split("\n"):
-        rotulo = linea.startswith("— ") and linea.endswith(" —")
-        if rotulo or (linea.isupper() and len(linea) <= 60):
-            partes.append(f'<div style="font-weight:600;color:{C["texto"]};margin-top:8px">'
-                          f'{h(oracion(linea.strip("— ")))}</div>')
-        else:
-            if partes and not partes[-1].endswith("</div>"):
-                partes.append("<br>")
-            partes.append(h(oracion(linea)))
-    return "".join(partes)
-
-
-def bloque_ficha(icono, titulo, contenido):
-    return (f'<tr><td style="padding:14px 16px 0">'
-            f'<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
-            f'<td valign="middle" style="padding-right:6px">{img(icono, 14)}</td>'
-            f'<td valign="middle" style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.06em;'
-            f'color:{C["enlace"]}">{h(titulo.upper())}</td></tr></table>'
-            f'<div style="margin-top:4px;font-size:13px;line-height:20px;color:{C["cuerpo"]}">{contenido}</div>'
-            f'</td></tr>')
-
-
-def html_ficha(c, ahora):
-    """Ficha técnica de una cotización UNIQ nueva: datos del sistema + extracto del TDR/EETT."""
-    dias = dias_hasta(c["limite"], ahora)
-    conv = f' · {c["convocatoria"]}ª convocatoria' if c["convocatoria"] > 1 else ""
-    marcas = etiqueta("NUEVA", "azul") if c["nueva"] else ""
-    if dias <= DIAS_ALERTA:
-        marcas += etiqueta("CIERRA PRONTO", "rojo")
-    if c.get("coincide"):
-        marcas += etiqueta(f'Coincide: {c["coincide"]}', "contorno")
-    if c["desierta"]:
-        marcas += etiqueta("Sin postores en la anterior", "gris")
-
-    datos = [("Fecha límite", f'{fecha_corta(c["limite"])} ({vence(dias)})'),
-             ("Dependencia", nombre_propio(c["dependencia"])), ("Área usuaria", c["correo"]),
-             ("Financiamiento", nombre_propio(c["fuente"])),
-             ("Plazo de entrega", f'{c["plazo_entrega"]} días' if c["plazo_entrega"] else "")]
-    filas = "".join(f'<tr><td width="36%" valign="top" style="padding:6px 12px 6px 0;border-bottom:1px solid {C["linea"]};'
-                    f'font-size:12px;line-height:18px;color:{C["suave"]}">{h(k)}</td>'
-                    f'<td valign="top" style="padding:6px 0;border-bottom:1px solid {C["linea"]};font-size:13px;'
-                    f'line-height:18px;color:{C["texto"]}">{h(v)}</td></tr>' for k, v in datos if v)
-    cuerpo = (f'<tr><td style="padding:6px 16px 0"><table role="presentation" width="100%" cellpadding="0" '
-              f'cellspacing="0">{filas}</table></td></tr>')
-
-    if c["items"]:
-        lis = "".join(f'<tr><td style="padding:4px 10px 4px 0;border-bottom:1px solid {C["linea"]}">{h(oracion(n))}</td>'
-                      f'<td align="right" style="padding:4px 0;border-bottom:1px solid {C["linea"]};text-align:right;'
-                      f'white-space:nowrap;font-weight:600;color:{C["texto"]}">{h(q)}</td></tr>'
-                      for n, q in c["items"][:MAX_ITEMS])
-        if len(c["items"]) > MAX_ITEMS:
-            lis += f'<tr><td colspan="2" style="padding:4px 0">y {len(c["items"]) - MAX_ITEMS} ítems más en el PDF</td></tr>'
-        cuerpo += bloque_ficha("items", f"Ítems ({len(c['items'])})",
-                               f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{lis}</table>')
-    for clave, titulo, _, _ in uniq.SECCIONES:
-        if c["secciones"].get(clave):
-            cuerpo += bloque_ficha(clave, titulo, html_parrafos(c["secciones"][clave]))
-    if c["error_pdf"]:
-        cuerpo += bloque_ficha("error_pdf", f'No se pudo leer el {c["doc"]}', h(c["error_pdf"]))
-    if c["tdr_url"]:
-        abrir = boton(c["tdr_url"], f'Abrir {c["doc"]} completo (PDF)', "pdf")
-        cuerpo += f'<tr><td style="padding:0 16px 16px">{abrir}</td></tr>'
-
-    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {C["linea"]};'
-            f'border-radius:8px;border-collapse:separate;border-spacing:0;margin:0 0 16px">'
-            f'<tr><td style="background:{C["cabecera"]};border-bottom:1px solid {C["linea"]};padding:14px 16px;'
-            f'border-radius:8px 8px 0 0">'
-            f'<div style="font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.06em;color:{C["suave"]}">'
-            f'UNIQ · {h(c["tipo"].upper())} · N° {c["numero"]}{h(conv.upper())}</div>'
-            f'<div style="font-size:16px;line-height:22px;font-weight:700;color:{C["navy"]};margin:4px 0 8px">'
-            f'{h(oracion(c["titulo"]))}</div>{marcas}</td></tr>{cuerpo}</table>')
-
-
 def html_fuentes(fuentes):
     filas = ""
     for i, (nombre, ok, detalle, cobertura) in enumerate(fuentes):
@@ -721,10 +643,10 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
     cuerpo += "<!--LARGO-->" + html_indice([("Palabras clave", [(mostrar(n), i) for n, i in grupos]),
                                             ("Entidades", [(nombre_propio(n), i) for n, i in seguidas]),
-                                            ("Regiones", [(nombre_zona(n), i) for n, i in zonas])])
+                                            ("Regiones (sin repetir lo anterior)", [(nombre_zona(n), i) for n, i in zonas])])
 
     # Primero lo corto y siempre importante (UNIQ y entidades); después lo que puede crecer mucho
-    # (coincidencias y fichas), así lo que Gmail llegara a cortar es lo menos urgente.
+    # (coincidencias y regiones), así lo que Gmail llegara a cortar es lo menos urgente.
     if con_uniq:
         cuerpo += seccion(next(numero), "s_uniq", "Cotizaciones UNIQ activas", "Todas las convocatorias vigentes, por fecha límite.")
         if convs is None:
@@ -735,7 +657,7 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
             cuerpo += html_uniq(convs, ahora, completo)
 
     # Modo resumido: cada sección larga usa una parte de lo que QUEDA bajo el límite de Gmail (lo que no
-    # gasta pasa a la siguiente); las fichas llenan el resto. En modo completo no hay tope.
+    # gasta pasa a la siguiente). En modo completo no hay tope.
     reserva = len((seccion(9, "s_fuentes", "Fuentes") + html_fuentes(fuentes)).encode()) + 1_000
 
     def queda(fraccion):
@@ -751,6 +673,7 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     if palabras:
         cuerpo += seccion(next(numero), "s_coinc", "Coincidencias por palabra clave",
                           "SEACE (contrataciones menores y procedimientos de selección con el registro abierto)"
+                          + (" solo en las regiones de este informe" if zonas else " de todo el país")
                           + (" y cotizaciones de la UNIQ" if con_uniq else "") + ". Ordenadas por fecha de cierre.")
         if completo:
             cuerpo += html_grupos_completo(grupos, ahora, mostrar, "Sin coincidencias en este momento.", amplia=MUY_GENERAL)
@@ -769,24 +692,6 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
         cuerpo += (html_grupos_completo(zonas, ahora, nombre_zona, vacio) if completo else
                    html_grupos(zonas, ahora, nombre_zona, vacio, cupo={"completas": 10, "nuevas_breves": 40, "breves": 15},
                                max_bytes=queda(0.80)))
-
-    # Completo: ficha de todas las cotizaciones UNIQ activas. Resumido: solo las nuevas, mientras quepan
-    # bajo el límite de Gmail; las demás quedan enlazadas desde la tabla de cotizaciones UNIQ.
-    con_ficha = list(convs or []) if completo else uniq_nuevas
-    fichas, omitidas = "", 0
-    for c in con_ficha:
-        ficha = html_ficha(c, ahora)
-        if not completo and len((cuerpo + fichas + ficha).encode()) + reserva > LIMITE_HTML:
-            omitidas += 1
-        else:
-            fichas += ficha
-    if con_ficha:
-        cuerpo += seccion(next(numero), "s_fichas", "Fichas técnicas de las cotizaciones UNIQ" + ("" if completo else " nuevas"),
-                          "Extracto del TDR/EETT: lo necesario para decidir si cotizar.") + fichas
-        if omitidas:
-            cuerpo += (f'<p style="margin:0 0 12px;font-size:13px;line-height:19px;color:{C["suave"]}">'
-                       f'{plural(omitidas, "ficha más no entró", "fichas más no entraron")} en este correo para que Gmail '
-                       f'no lo corte: su TDR/EETT está enlazado en la tabla de cotizaciones UNIQ.</p>')
 
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
@@ -846,17 +751,6 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), z
         lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar, completo)
     if zonas:
         lineas += ["", f"{next(numero)}. REGIONES QUE SIGUES"] + texto_grupos(zonas, ahora, nombre_zona, completo)
-    con_ficha = list(convs or []) if completo else [c for c in convs or [] if c["nueva"]]
-    if con_ficha:
-        lineas += ["", f"{next(numero)}. FICHAS TÉCNICAS (UNIQ{'' if completo else ', NUEVAS'})"]
-        for c in con_ficha:
-            lineas += ["", "-" * 60, f"{c['tipo']} · N° {c['numero']} · {oracion(c['titulo'])}",
-                       f"Fecha límite: {fecha_corta(c['limite'])} · Dependencia: {nombre_propio(c['dependencia'])}"]
-            if c["items"]:
-                lineas += ["Ítems:"] + [f"  - {oracion(n)}: {q}" for n, q in c["items"][:MAX_ITEMS]]
-            for clave, titulo, _, _ in uniq.SECCIONES:
-                if c["secciones"].get(clave):
-                    lineas += [f"{titulo}:", c["secciones"][clave]]
     lineas += ["", "FUENTES"] + [f"  {n}: {'operativa' if ok else 'SIN RESPUESTA'} · {d} · {cob}" for n, ok, d, cob in fuentes]
     return "\n".join(lineas)
 

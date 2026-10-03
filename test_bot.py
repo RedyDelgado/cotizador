@@ -238,6 +238,27 @@ assert [x.get_filename() for x in corto.iter_attachments()] == []
 assert [x.get_filename() for x in largo.iter_attachments()] == ["informe-2026-09-28.html"]
 assert largo.get_body(("html",)).get_content().startswith("<p>hola")  # el cuerpo sigue siendo el HTML con iconos
 
+# Palabras clave SOLO en las regiones del perfil: se filtran sobre lo abierto en esas regiones.
+def abierto(id_, titulo, entidad="E", tipo="Licitación Pública", texto=None):
+    return {"id": id_, "fuente": "SEACE", "tipo": tipo, "titulo": titulo, "entidad": entidad, "codigo": id_, "url": "u",
+            "bases": None, "cierre": datetime(2026, 10, 9, 23, 59, tzinfo=uniq.LIMA), "abierta": True, "inicio": None,
+            "convocatoria": None, "monto": 0, "nuevo": True, **({"texto": texto} if texto else {})}
+
+
+candidatos = {x["id"]: x for x in (
+    abierto("p-1", "ADQUISICION DE CEMENTO PORTLAND", texto="ADQUISICION DE CEMENTO PORTLAND TIPO I"),
+    abierto("p-2", "SUMINISTRO DE COMBUSTIBLE", texto="SUMINISTRO DE COMBUSTIBLE | ademas CEMENTO ASFALTICO"),  # el ítem lo menciona
+    abierto("m-3", "COMPRA DE FIERRO CORRUGADO", tipo="Contratación menor"),                                  # menor: sin "texto"
+    abierto("p-4", "SERVICIO DE LIMPIEZA"))}
+fuentes_t = []
+g, ids = bot.coincidencias_en_regiones(["cemento", "fierro", '"sistema académico"'], [], candidatos, fuentes_t)
+assert [(f, sorted(x["id"] for x in it)) for f, it in g] == [("cemento", ["p-1", "p-2"]), ("fierro", ["m-3"]), ('"sistema académico"', [])]
+assert ids == {"p-1", "p-2", "m-3"} and fuentes_t[0][1] is True
+g2, _ = bot.coincidencias_en_regiones(["cemento", "cemento portland"], [], candidatos, [])
+assert [x["id"] for x in g2[1][1]] == []  # un proceso que calza con dos frases sale solo en la primera
+g3, _ = bot.coincidencias_en_regiones(["cemento"], [], {}, [])  # sin candidatos: nada, y no se busca en todo el país
+assert g3 == [("cemento", [])]
+
 # Informe sin UNIQ ni palabras clave (alguien que solo sigue una entidad): sin secciones vacías.
 proceso = {"id": "p-1", "fuente": "SEACE", "tipo": "Licitación Pública", "titulo": "ADQUISICION DE CEMENTO", "entidad": "MUNICIPALIDAD DISTRITAL DE ECHARATI",
            "codigo": "LP-1", "url": "https://x/1", "bases": None, "cierre": datetime(2026, 10, 5, 23, 59, tzinfo=uniq.LIMA),

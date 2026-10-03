@@ -137,9 +137,7 @@ def guardar_estado(estado, ahora):
 def descargar_uniq(s, ahora):
     """(convocatorias, error): se descarga una sola vez y cada perfil trabaja con su copia."""
     try:
-        convs = uniq.obtener_convocatorias(s, ahora)
-        for c in convs:
-            uniq.leer_tdr(s, c)
+        convs = uniq.obtener_convocatorias(s, ahora)  # cada fila del informe enlaza su TDR/EETT: no se descarga
     except Exception as e:
         log.exception("Falló la fuente UNIQ")
         return None, e
@@ -164,8 +162,34 @@ def proceso_uniq(c):
             "cierre": c["limite"], "abierta": True, "inicio": None, "convocatoria": None, "monto": 0, "nuevo": c["nueva"]}
 
 
+def cerrar_grupo(items, convs, frase, listados):
+    """Suma las cotizaciones UNIQ que calzan con la frase, quita lo ya listado en una frase anterior (un
+    proceso que calza con dos frases sale solo en la primera) y ordena: lo que cierra antes, arriba."""
+    for c in convs or []:
+        if seace.coincide(c["titulo"], frase):
+            c.setdefault("coincide", frase)
+            items.append(proceso_uniq(c))
+    items = [x for x in items if x["id"] not in listados]
+    listados |= {x["id"] for x in items}
+    items.sort(key=lambda x: (0, x["cierre"].timestamp()) if x["cierre"] else (1, -x["convocatoria"].timestamp()))
+    return items
+
+
+def coincidencias_en_regiones(palabras, convs, candidatos, fuentes):
+    """Palabras clave buscadas SOLO entre lo abierto en las regiones del perfil (candidatos: {id: proceso})."""
+    grupos, listados = [], set()
+    for frase in palabras:
+        items = [x for x in candidatos.values() if seace.coincide(x.get("texto") or x["titulo"], frase)]
+        grupos.append((frase, cerrar_grupo(items, convs, frase, listados)))
+    total = sum(len(i) for _, i in grupos)
+    fuentes.append(("SEACE · Palabras clave en tus regiones", True, f"{total} coincidencias",
+                    "Procedimientos y contrataciones menores de las regiones del perfil"))
+    log.info("Coincidencias (solo en las regiones del perfil): %s", {f: len(i) for f, i in grupos})
+    return grupos, {x["id"] for _, items in grupos for x in items if x["fuente"] == "SEACE"}
+
+
 def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
-    """[(frase, [procesos])] de todas las fuentes. Un proceso que calza con dos frases sale en la primera."""
+    """[(frase, [procesos])] de todo el país (para perfiles sin regiones)."""
     vistos = set(estado.get("seace", []))
     busquedas = [("menores", "SEACE · Contrataciones menores", "Tiempo real · hasta 8 UIT", seace.menores),
                  ("oportunidades", "SEACE · Oportunidades de Negocio", "Procedimientos con registro abierto",
@@ -186,15 +210,7 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
                 x["nuevo"] = x["id"] not in vistos
             cuenta[clave] += len(encontrados)
             items += encontrados
-        for c in convs or []:
-            if seace.coincide(c["titulo"], frase):
-                c.setdefault("coincide", frase)
-                items.append(proceso_uniq(c))
-        items = [x for x in items if x["id"] not in listados]
-        listados |= {x["id"] for x in items}
-        # Primero lo que tiene fecha de cierre (lo más próximo arriba), luego lo más recién convocado.
-        items.sort(key=lambda x: (0, x["cierre"].timestamp()) if x["cierre"] else (1, -x["convocatoria"].timestamp()))
-        grupos.append((frase, items))
+        grupos.append((frase, cerrar_grupo(items, convs, frase, listados)))
     if palabras:
         for clave, nombre, cobertura, _ in busquedas:
             ok = clave not in errores
@@ -362,17 +378,29 @@ def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
     propio = estado_de(estado, perfil)
     fuentes = []
     convs = leer_uniq(uniq_base, uniq_error, propio, fuentes) if perfil["uniq"] else None
-    grupos, seace_ids, seace_fallo = buscar_coincidencias(s, ahora, perfil["palabras"], convs, propio, fuentes)
-    seguidas, _, entidades_fallo = buscar_entidades(s, ahora, perfil["entidades"], propio, fuentes)
+    # Las regiones primero: son la base de las palabras clave. Con regiones, las palabras clave se buscan
+    # SOLO ahí; sin regiones, en todo el país.
     zonas, zonas_fallo = buscar_zonas(s, ahora, perfil["regiones"], propio, fuentes, estado.setdefault("ubigeos", {}))
+    if perfil["palabras"] and perfil["regiones"]:
+        if zonas:
+            candidatos = {x["id"]: x for _, items in zonas for x in items}
+        else:  # no se pudo leer ninguna región: mejor sin resultados que buscar en todo el país por error
+            candidatos = {}
+            fuentes.append(("SEACE · Palabras clave en tus regiones", False,
+                            "No se pudo leer ninguna región: revisa REGIONES en perfiles.ini", "Regiones del perfil"))
+        grupos, seace_ids = coincidencias_en_regiones(perfil["palabras"], convs, candidatos, fuentes)
+        seace_fallo = zonas_fallo
+    else:
+        grupos, seace_ids, seace_fallo = buscar_coincidencias(s, ahora, perfil["palabras"], convs, propio, fuentes)
+    seguidas, _, entidades_fallo = buscar_entidades(s, ahora, perfil["entidades"], propio, fuentes)
     # Las contrataciones menores de las entidades que sigues salen de lo ya descargado para sus regiones,
-    # y lo que ya está en "Entidades que sigues" no se repite en "Regiones que sigues".
+    # y lo que ya salió en "Entidades que sigues" o en las palabras clave no se repite en "Regiones que sigues".
     seguidas = [(e, sorted(items + [x for _, zitems in zonas for x in zitems if x["tipo"] == "Contratación menor"
                                     and seace.normal(e) in seace.normal(x["entidad"])], key=lambda x: x["cierre"]))
                 for e, items in seguidas]
-    en_entidades = {x["id"] for _, items in seguidas for x in items}
-    zonas = [(z, [x for x in items if x["id"] not in en_entidades]) for z, items in zonas]
-    seace_ids |= en_entidades | {x["id"] for _, items in zonas for x in items}
+    arriba = {x["id"] for _, items in seguidas + grupos for x in items}
+    zonas = [(z, [x for x in items if x["id"] not in arriba]) for z, items in zonas]
+    seace_ids |= {x["id"] for _, items in seguidas for x in items} | {x["id"] for _, items in zonas for x in items}
     # Ubicación (región › provincia › distrito) de todo lo que sale en el informe; se guarda en el estado.
     todos = [x for _, items in grupos + seguidas + zonas for x in items]
     seace.completar_lugares(s, todos, estado.setdefault("lugares", {}), ahora, log)

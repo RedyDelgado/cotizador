@@ -5,7 +5,8 @@
 #
 # Claves de cada bloque (todas opcionales, menos correos):
 #   correos         uno o varios destinatarios, separados por coma
-#   palabras_clave  palabra o frase; entre comillas, las palabras tienen que ir juntas
+#   palabras_clave  palabra o frase; entre comillas, las palabras tienen que ir juntas.
+#                   Se buscan SOLO en las regiones del bloque (sin regiones: en todo el país)
 #   entidades       parte del nombre de la entidad (todo lo que tenga abierto)
 #   regiones        CUSCO (todo el departamento) o APURIMAC/ABANCAY (solo esa provincia)
 #   uniq            si / no: recibir las cotizaciones de la UNIQ (por defecto si)

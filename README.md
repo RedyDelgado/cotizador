@@ -4,19 +4,18 @@ Todos los días a las 07:00 (hora de Lima) envía **un informe** por correo, con
 
 1. **Resumen ejecutivo**: coincidencias, nuevas, por cerrar (2 días o menos) y cotizaciones UNIQ
    activas, más una frase que lo resume.
-2. **Cotizaciones UNIQ activas**: todas, por fecha límite, marcando las que coinciden con tus
-   palabras clave.
+2. **Cotizaciones UNIQ activas**: todas, por fecha límite, cada una con el enlace a su TDR/EETT
+   (el documento completo), marcando las que coinciden con tus palabras clave.
 3. **Entidades que sigues** (si defines `ENTIDADES`): todo lo que tienen abierto, sin filtrar por
    palabra clave.
 4. **Coincidencias por palabra clave**: una tabla por cada palabra clave con los procesos de todas
    las fuentes, ordenados por fecha de cierre, con etiquetas NUEVO / CIERRA PRONTO / fuente, el
-   enlace a la ficha oficial y a las bases. Si una palabra clave trae 60 resultados o más, el
-   informe te sugiere afinarla.
-5. **Regiones que sigues** (si defines `REGIONES`): todo lo abierto en esas regiones o provincias.
-6. **Fichas técnicas** de las cotizaciones UNIQ: datos del sistema y el extracto del **TDR/EETT**
-   para decidir si cotizar (ítems y cantidades, objetivo, **requisitos del proveedor**, plazo y
-   lugar, pago, adelantos, garantías, penalidades y características técnicas).
-7. **Fuentes**: estado de cada fuente.
+   enlace a la ficha oficial y a las bases. **Si el perfil define `regiones`, las palabras clave se
+   buscan solo ahí**; sin regiones, en todo el país. Si una palabra clave trae 60 resultados o más,
+   el informe te sugiere afinarla.
+5. **Regiones que sigues** (si defines `REGIONES`): todo lo abierto en esas regiones o provincias,
+   sin repetir lo que ya salió en las secciones anteriores.
+6. **Fuentes**: estado de cada fuente.
 
 Por defecto (`INFORME_COMPLETO=si`) todo sale en detalle cada día, aunque el correo sea largo.
 Gmail solo muestra los primeros ~102 KB del cuerpo y esconde el resto detrás de "Ver mensaje
@@ -31,7 +30,7 @@ completo", así que el informe se protege de tres formas:
 
 Lo buscado específicamente (UNIQ, entidades, palabras clave) va arriba y las regiones, que son lo
 más largo, después. Con `INFORME_COMPLETO=no` el informe se mantiene bajo el límite de Gmail: lo ya
-informado sale en una línea y solo las cotizaciones UNIQ nuevas llevan ficha.
+informado sale en una línea.
 
 **Ubicación:** cada proceso de SEACE muestra región › provincia › distrito (por ejemplo, *Cusco ›
 La Convención › Santa Ana*): el lugar de entrega de sus ítems y, si falta, el de la entidad. Se
@@ -125,7 +124,7 @@ completo = no
 | Clave | Qué hace |
 |---|---|
 | `correos` | uno o varios destinatarios del bloque, separados por coma (obligatoria) |
-| `palabras_clave`, `entidades`, `regiones` | lo que sigue ese bloque, con la misma sintaxis de arriba; todas opcionales |
+| `palabras_clave`, `entidades`, `regiones` | lo que sigue ese bloque, con la misma sintaxis de arriba; todas opcionales. **Las palabras clave se buscan solo en las `regiones` del bloque**; si no tiene regiones, en todo el país |
 | `uniq` | `si` (por defecto) o `no`: recibir las cotizaciones de la UNIQ |
 | `completo` | `si` (por defecto) o `no`: informe entero cada día, o lo ya informado resumido |
 
