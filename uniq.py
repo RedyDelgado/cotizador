@@ -15,6 +15,10 @@ URL_LISTADO = f"{BASE}/cotizaciones/servicio_listar_publicadas"
 URL_TDR = f"{BASE}/cotizaciones/imprimir?id_requerimiento={{}}"
 URL_LOGIN = f"{BASE}/login"
 
+# La UNIQ es una entidad más: se sigue escribiéndola en `entidades` (perfiles.ini). Estos nombres la identifican.
+NOMBRE = "UNIVERSIDAD NACIONAL INTERCULTURAL DE QUILLABAMBA"  # como figura en SEACE
+ALIAS = {"UNIQ", NOMBRE}
+
 # Perú no usa horario de verano desde 1994: UTC-5 fijo, sin depender de tzdata.
 LIMA = timezone(timedelta(hours=-5), "America/Lima")
 DIAS_ATRAS = 30   # entre publicación y fecha límite pasan <= 7 días; 30 cubre de sobra

@@ -7,9 +7,11 @@
 #   correos         uno o varios destinatarios, separados por coma
 #   palabras_clave  palabra o frase; entre comillas, las palabras tienen que ir juntas.
 #                   Se buscan SOLO en las regiones del bloque (sin regiones: en todo el país)
-#   entidades       parte del nombre de la entidad (todo lo que tenga abierto)
+#   entidades       parte del nombre de la entidad (todo lo que tenga abierto). La UNIQ es una entidad
+#                   más: escribe UNIQ y recibes también sus cotizaciones en línea
 #   regiones        CUSCO (todo el departamento) o APURIMAC/ABANCAY (solo esa provincia)
-#   uniq            si / no: recibir las cotizaciones de la UNIQ (por defecto si)
+#   uniq            (opcional) si = recibir las cotizaciones de la UNIQ sin ponerla en entidades.
+#                   Por defecto no: quien no sigue a la UNIQ no la recibe
 #   completo        si / no: informe entero cada día, o lo ya informado resumido (por defecto si)
 #
 # Lo NUEVO es propio de cada bloque: a cada uno se le marca lo que no vio en su último correo.
@@ -18,14 +20,12 @@
 [redy]
 correos = redy.delgado@gmail.com
 palabras_clave = software,"sistema académico",sistema de seguridad ciudadana,"aplicación web","botón de pánico"
-entidades = LA CONVENCION,MUNICIPALIDAD DISTRITAL DE ECHARATI,MUNICIPALIDAD DISTRITAL DE MARANURA,MUNICIPALIDAD DISTRITAL DE SANTA TERESA
+entidades = UNIQ,LA CONVENCION,MUNICIPALIDAD DISTRITAL DE ECHARATI,MUNICIPALIDAD DISTRITAL DE MARANURA,MUNICIPALIDAD DISTRITAL DE SANTA TERESA
 regiones = CUSCO,MADRE DE DIOS,APURIMAC/ABANCAY,APURIMAC/COTABAMBAS
-uniq = si
 completo = si
 
 [grupo indescar]
 correos = Grupoindescar@gmail.com
 palabras_clave = cemento,fierro,maíz
 regiones = CUSCO
-uniq = no
 completo = no

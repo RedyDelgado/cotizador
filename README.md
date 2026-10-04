@@ -112,24 +112,25 @@ cosas distintas, copia `perfiles.ini.example` como `perfiles.ini` y define un bl
 [redy]
 correos = redy.delgado@gmail.com
 palabras_clave = software,"sistema académico",sistema de seguridad ciudadana
-entidades = LA CONVENCION,MUNICIPALIDAD DISTRITAL DE ECHARATI
+entidades = UNIQ,LA CONVENCION,MUNICIPALIDAD DISTRITAL DE ECHARATI
 regiones = CUSCO
-uniq = si
 completo = si
 
 [grupo indescar]
 correos = Grupoindescar@gmail.com
 palabras_clave = cemento,fierro,maíz
 regiones = CUSCO,MADRE DE DIOS
-uniq = no
 completo = no
 ```
+
+La UNIQ es una entidad más: **solo quien la escribe en `entidades` recibe sus cotizaciones en línea**
+(además de lo que tenga abierto en SEACE). En el ejemplo, `redy` la recibe y `grupo indescar` no.
 
 | Clave | Qué hace |
 |---|---|
 | `correos` | uno o varios destinatarios del bloque, separados por coma (obligatoria) |
 | `palabras_clave`, `entidades`, `regiones` | lo que sigue ese bloque, con la misma sintaxis de arriba; todas opcionales. **Las palabras clave se buscan solo en las `regiones` del bloque**; si no tiene regiones, en todo el país |
-| `uniq` | `si` (por defecto) o `no`: recibir las cotizaciones de la UNIQ |
+| `uniq` | (opcional) `si`: recibir las cotizaciones de la UNIQ sin ponerla en `entidades`. Por defecto `no` |
 | `completo` | `si` (por defecto) o `no`: informe entero cada día, o lo ya informado resumido |
 
 - **Lo NUEVO es propio de cada bloque:** a cada uno se le marca lo que no vio en su último correo.

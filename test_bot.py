@@ -110,7 +110,17 @@ perfiles = carga()
 ana, luis = perfiles
 assert [p["nombre"] for p in perfiles] == ["ana", "luis"]
 assert ana["correos"] == ["a@x.com", "b@y.org"] and ana["palabras"] == ["software", '"sistema académico"', "cemento"]
-assert ana["uniq"] is False and ana["completo"] is False and luis["uniq"] is True and luis["completo"] is True
+assert ana["uniq"] is False and ana["completo"] is False and luis["uniq"] is False and luis["completo"] is True  # sin pedirla, no hay UNIQ
+
+# La UNIQ es una entidad más: "UNIQ" en entidades la activa (y se busca en SEACE con su nombre completo);
+# la clave antigua uniq = si sigue funcionando; sin ninguna de las dos, no se recibe.
+c, d, e = con_ini('[a]\ncorreos = a@x.com\nentidades = LA CONVENCION, uniq\n'
+                  '[b]\ncorreos = b@x.com\nentidades = Universidad Nacional Intercultural de Quillabamba,UNIQ\n'
+                  '[c]\ncorreos = c@x.com\nuniq = si\n')()
+assert c["uniq"] and c["entidades"] == ["LA CONVENCION", uniq.NOMBRE]
+assert d["uniq"] and d["entidades"] == [uniq.NOMBRE]            # los dos nombres no se duplican
+assert e["uniq"] and e["entidades"] == []                        # clave antigua
+assert not con_ini('[x]\ncorreos = x@x.com\nentidades = LA CONVENCION\n')()[0]["uniq"]
 assert ana["regiones"] == ["CUSCO", "APURIMAC/ABANCAY"] and luis["palabras"] == [] and luis["entidades"] == ["LA CONVENCION"]
 debe_fallar("[x]\npalabras_clave = software\n", "falta 'correos'")
 debe_fallar("[x]\ncorreos = no-es-correo\n", "correo no válido")

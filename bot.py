@@ -326,13 +326,21 @@ def es_si(texto, por_defecto=True):
     return texto.strip().lower() not in ("no", "0", "false", "falso")
 
 
+def separar_uniq(entidades):
+    """La UNIQ es una entidad más: escribir "UNIQ" en `entidades` activa sus cotizaciones en línea. Devuelve
+    (entidades con el nombre completo de la UNIQ en SEACE, ¿el perfil sigue a la UNIQ?)."""
+    sigue = any(seace.normal(e) in uniq.ALIAS for e in entidades)
+    return list(dict.fromkeys(uniq.NOMBRE if seace.normal(e) in uniq.ALIAS else e for e in entidades)), sigue
+
+
 def cargar_perfiles():
     """[{nombre, correos, palabras, entidades, regiones, uniq, completo, legacy}]. ValueError si el
     archivo tiene un error (con el mensaje para corregirlo)."""
     ruta = DIR / "perfiles.ini"
     if not ruta.exists():
         return [{"nombre": "principal", "legacy": True, "correos": lista(os.environ.get("MAIL_TO")),
-                 "palabras": lista(os.environ.get("PALABRAS_CLAVE")), "entidades": lista(os.environ.get("ENTIDADES")),
+                 "palabras": lista(os.environ.get("PALABRAS_CLAVE")),
+                 "entidades": separar_uniq(lista(os.environ.get("ENTIDADES")))[0],
                  "regiones": lista(os.environ.get("REGIONES")), "uniq": True,
                  "completo": es_si(os.environ.get("INFORME_COMPLETO"))}]
     ini = configparser.ConfigParser(interpolation=None)  # sin interpolación: el % es un carácter normal
@@ -357,11 +365,13 @@ def cargar_perfiles():
         malos = [c for c in correos if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", c)]
         if malos:
             raise ValueError(f"perfiles.ini [{nombre}]: correo no válido: {malos[0]!r}")
+        entidades, sigue_uniq = separar_uniq(lista(sec.get("entidades")))
+        # La UNIQ se recibe solo si el perfil la pide: con "UNIQ" en entidades o con la clave antigua uniq = si.
         perfil = {"nombre": nombre, "legacy": False, "correos": correos, "palabras": lista(sec.get("palabras_clave")),
-                  "entidades": lista(sec.get("entidades")), "regiones": lista(sec.get("regiones")),
-                  "uniq": es_si(sec.get("uniq")), "completo": es_si(sec.get("completo"))}
+                  "entidades": entidades, "regiones": lista(sec.get("regiones")),
+                  "uniq": sigue_uniq or es_si(sec.get("uniq"), por_defecto=False), "completo": es_si(sec.get("completo"))}
         if not (perfil["uniq"] or perfil["palabras"] or perfil["entidades"] or perfil["regiones"]):
-            raise ValueError(f"perfiles.ini [{nombre}]: no sigue nada (sin uniq, palabras_clave, entidades ni regiones)")
+            raise ValueError(f"perfiles.ini [{nombre}]: no sigue nada (sin palabras_clave, entidades ni regiones)")
         perfiles.append(perfil)
     if not perfiles:
         raise ValueError("perfiles.ini no tiene ningún perfil (cada uno empieza con [nombre])")
