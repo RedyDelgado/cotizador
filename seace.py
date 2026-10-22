@@ -204,6 +204,10 @@ def procedimientos_de_entidades(s, entidades, ahora):
 # usa el lugar de entrega de los ítems (lo que importa para cotizar) y, si falta, el de la entidad.
 
 URL_DETALLE_MENOR = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/listar-completo"
+# El botón "Descargar requerimiento" de una contratación menor (TDR / especificaciones técnicas): se lista el
+# archivo de la categoría 1 y se baja por su id. Es público y se puede enlazar directo.
+URL_ARCHIVOS_MENOR = "https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos-publico/listar-archivos-contrato/{}/1"
+URL_REQUERIMIENTO = "https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos-publico/descargar-archivo-contrato/{}"
 DIAS_CACHE_LUGAR = 45  # un proceso sigue abierto 1 o 2 semanas; 45 días da margen de sobra
 
 
@@ -212,6 +216,14 @@ def _lugar_de_menor(s, id_contrato):
     r.raise_for_status()
     items = (r.json() or {}).get("uitContratoItemProjectionList") or []
     return " | ".join(dict.fromkeys(i["nomDistrito"].strip() for i in items if i.get("nomDistrito")))
+
+
+def _requerimiento_de_menor(s, id_contrato):
+    """Id del archivo del requerimiento ("" si la contratación no lo tiene)."""
+    r = s.get(URL_ARCHIVOS_MENOR.format(id_contrato), timeout=60)
+    r.raise_for_status()
+    archivos = r.json()
+    return str(archivos[0]["idContratoArchivo"]) if isinstance(archivos, list) and archivos else ""
 
 
 def _lugar_de_proceso(s, id_proceso):
@@ -228,36 +240,48 @@ def _lugar_de_proceso(s, id_proceso):
 
 
 def completar_lugares(s, procesos, cache, ahora, log=None):
-    """Pone x["lugar"] ("CUSCO/LA CONVENCION/SANTA ANA", o varios separados por " | ") a cada proceso de
-    SEACE. cache = {id: {"l": lugar, "v": última vez visto}} se guarda en estado.json: cada día solo se
-    consulta lo que no se había visto. Una consulta que falla deja el lugar vacío; no rompe el informe."""
+    """Completa cada proceso de SEACE con su ubicación x["lugar"] ("CUSCO/LA CONVENCION/SANTA ANA", o varios
+    separados por " | ") y, en las contrataciones menores, con el enlace directo a su requerimiento (x["bases"]).
+    cache = {id: {"l": lugar, "r": id del archivo del requerimiento, "v": última vez visto}} se guarda en
+    estado.json: cada día solo se consulta lo que no se había visto. Una consulta que falla deja ese dato
+    vacío; no rompe el informe."""
     hoy = f"{ahora:%Y-%m-%d}"
     pendientes = {}
     for x in procesos:
         if x["fuente"] != "SEACE":
             continue
-        guardado = cache.get(x["id"])
-        if guardado:
+        guardado = cache.get(x["id"], {})
+        if "l" in guardado and ("r" in guardado or not x["id"].startswith("m-")):
             guardado["v"] = hoy
-            x["lugar"] = guardado["l"]
         else:
             pendientes.setdefault(x["id"], []).append(x)
 
     def buscar(id_):
-        numero = id_.split("-", 1)[1]
+        numero, previo = id_.split("-", 1)[1], cache.get(id_, {})
+        dato = {}
         try:
-            return id_, (_lugar_de_menor if id_.startswith("m-") else _lugar_de_proceso)(s, numero)
+            dato["l"] = previo["l"] if "l" in previo else (_lugar_de_menor if id_.startswith("m-") else _lugar_de_proceso)(s, numero)
         except Exception as e:
             if log:
                 log.warning("No se pudo leer la ubicación de %s: %s", id_, e)
-            return id_, None
+        if id_.startswith("m-") and "r" not in previo:
+            try:
+                dato["r"] = _requerimiento_de_menor(s, numero)
+            except Exception as e:
+                if log:
+                    log.warning("No se pudo leer el requerimiento de %s: %s", id_, e)
+        return id_, dato
 
     with ThreadPoolExecutor(max_workers=4) as pool:  # pocas conexiones a la vez: son portales públicos
-        for id_, lugar in pool.map(buscar, pendientes):
-            for x in pendientes[id_]:
-                x["lugar"] = lugar or ""
-            if lugar:
-                cache[id_] = {"l": lugar, "v": hoy}
+        for id_, dato in pool.map(buscar, pendientes):
+            if dato.get("l") or "r" in dato:
+                cache.setdefault(id_, {}).update({k: v for k, v in dato.items() if k == "r" or v}, v=hoy)
+    for x in procesos:
+        guardado = cache.get(x["id"], {})
+        if x["fuente"] == "SEACE":
+            x["lugar"] = guardado.get("l", "")
+            if x["id"].startswith("m-") and guardado.get("r"):
+                x["bases"], x["bases_etiqueta"] = URL_REQUERIMIENTO.format(guardado["r"]), "Descargar requerimiento"
     limite = f"{ahora - timedelta(days=DIAS_CACHE_LUGAR):%Y-%m-%d}"
     for id_ in [k for k, v in cache.items() if v["v"] < limite]:
         del cache[id_]
@@ -265,11 +289,29 @@ def completar_lugares(s, procesos, cache, ahora, log=None):
 
 # -------------------------------------------------------------- regiones
 
-def resolver_zonas(s, textos):
+def maestra(s, url, guardadas, clave):
+    """Lista de una maestra del SEACE (departamentos, provincias). El portal a veces responde un JSON de error
+    ({"code": "403", ...}) en vez de la lista: se avisa con claridad y, si hay una respuesta buena de antes
+    (guardadas = dict que se guarda en estado.json), se usa esa: departamentos y provincias casi no cambian."""
+    try:
+        r = s.get(url, timeout=60)
+        datos = r.json() if r.status_code == 200 else None
+        if not isinstance(datos, list):
+            raise RuntimeError(f"El portal respondió HTTP {r.status_code}: {r.text[:100]}")
+        guardadas[clave] = datos
+        return datos
+    except Exception:
+        if clave in guardadas:
+            return guardadas[clave]
+        raise
+
+
+def resolver_zonas(s, textos, maestras=None):
     """["CUSCO", "APURIMAC/ABANCAY"] -> zonas con los códigos del SEACE. Una región sola trae todo el
     departamento (gobierno regional, provincias, distritos, redes de salud, UGEL...); REGION/PROVINCIA
     trae solo esa provincia. Falla con un mensaje claro si un nombre no existe."""
-    departamentos = {normal(d["nom"]): d for d in s.get(f"{URL_MAESTRAS}/listar-departamento", timeout=60).json()}
+    maestras = {} if maestras is None else maestras
+    departamentos = {normal(d["nom"]): d for d in maestra(s, f"{URL_MAESTRAS}/listar-departamento", maestras, "dep")}
     zonas = []
     for texto in textos:
         region, _, provincia = (p.strip() for p in texto.partition("/"))
@@ -280,7 +322,7 @@ def resolver_zonas(s, textos):
                 "provincia": None, "prov_id": None}
         if provincia:
             provincias = {normal(p["nom"]): p for p in
-                          s.get(f"{URL_MAESTRAS}/listar-provincia/{dep['id']}", timeout=60).json()}
+                          maestra(s, f"{URL_MAESTRAS}/listar-provincia/{dep['id']}", maestras, f"prov{dep['id']}")}
             prov = provincias.get(normal(provincia))
             if not prov:
                 raise ValueError(f"REGIONES: {dep['nom']} no tiene la provincia {provincia!r}")

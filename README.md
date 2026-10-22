@@ -132,6 +132,9 @@ La UNIQ es una entidad más: **solo quien la escribe en `entidades` recibe sus c
 | `palabras_clave`, `entidades`, `regiones` | lo que sigue ese bloque, con la misma sintaxis de arriba; todas opcionales. **Las palabras clave se buscan solo en las `regiones` del bloque**; si no tiene regiones, en todo el país |
 | `uniq` | (opcional) `si`: recibir las cotizaciones de la UNIQ sin ponerla en `entidades`. Por defecto `no` |
 | `completo` | `si` (por defecto) o `no`: informe entero cada día, o lo ya informado resumido |
+| `pausado` | `si`: no se le envía nada hasta que lo quites (por defecto `no`) |
+| `nota` | texto libre para ti; no sale en el correo |
+| `empleo_palabras`, `empleo_regiones`, `empleo_sueldo_min` | ofertas de empleo, ver [Ofertas de empleo](#ofertas-de-empleo) |
 
 - **Lo NUEVO es propio de cada bloque:** a cada uno se le marca lo que no vio en su último correo.
 - **Las fuentes se consultan una sola vez** aunque haya varios bloques: agregar personas no suma carga
@@ -147,11 +150,75 @@ La UNIQ es una entidad más: **solo quien la escribe en `entidades` recibe sus c
   partir del ejemplo: `cp /opt/cotizaciones-uniq/perfiles.ini.example /opt/cotizaciones-uniq/perfiles.ini`
   y se edita con `nano`; el instalador no lo pisa.
 
+## Ofertas de empleo
+
+Además de las contrataciones, un bloque puede recibir ofertas de trabajo de dos portales oficiales:
+**Empleos Perú** (MTPE, sector privado y público) y **Talento Perú** (SERVIR, sector público). Se activan con
+cualquiera de estas claves del bloque:
+
+```ini
+[maria]
+correos = maria@example.com
+empleo_palabras = ingeniero,"asistente administrativo",abogado
+empleo_regiones = CUSCO,APURIMAC/ABANCAY
+empleo_sueldo_min = 3000
+```
+
+- `empleo_palabras` se busca en el **título** de la oferta (mismas reglas y comillas que `palabras_clave`).
+  Sin palabras, recibe todas las ofertas de sus regiones.
+- `empleo_regiones`: si falta, se usan las `regiones` del bloque; si tampoco hay, todo el país.
+- `empleo_sueldo_min`: quita lo que paga menos. Las ofertas que no publican sueldo se siguen mostrando
+  ("Sueldo no indicado"). Empleos Perú publica rangos (2,500–2,999): se compara con el tope del rango.
+- En el correo sale la sección **Ofertas de empleo** (una tabla por palabra o por región), con lugar
+  (región › provincia › distrito), sueldo, entidad, fecha de cierre (SERVIR) o de publicación, y lo nuevo marcado.
+- Sin regiones, SERVIR se consulta por palabra clave (por país serían 387 páginas); con regiones se recorre
+  cada departamento (Cusco, unas 19 páginas). SERVIR no tiene enlace por oferta: el enlace abre su buscador.
+- Cada portal que no responda queda anotado en **Fuentes** sin tumbar el resto del informe.
+- Todo esto también se maneja desde la pestaña **Empleos** del panel de suscriptores.
+
+## Panel de suscriptores
+
+Agrega, edita, pausa y elimina suscriptores desde una página, sin tocar `perfiles.ini` a mano. Es la misma
+configuración que lee el bot: lo que guardas ahí vale desde el siguiente envío.
+
+**Seguridad (no afecta a R-Uno):** no es un servicio. Se enciende cuando lo pides, escucha **solo en
+`127.0.0.1`** (nunca en la red; no abre puertos), pide una clave distinta en cada sesión y se apaga solo
+tras 60 minutos sin uso. Corre como `cotizbot`, con su propio `venv`.
+
+1. En tu PC abre un túnel SSH (en PuTTY: *Connection > SSH > Tunnels*, puerto de origen `8787`, destino
+   `127.0.0.1:8787`, **Add**, y conéctate como siempre; o desde una terminal con
+   `ssh -L 8787:127.0.0.1:8787 usuario@IP_DEL_VPS`).
+2. En esa sesión del VPS:
+
+   ```bash
+   sudo -u cotizbot /opt/cotizaciones-uniq/venv/bin/python /opt/cotizaciones-uniq/admin.py
+   ```
+
+3. Abre en tu navegador la dirección que imprime (`http://127.0.0.1:8787/?c=…`). `Ctrl+C` lo cierra.
+
+Qué ofrece:
+
+- **Lista de suscriptores** con buscador, estado (Activo / En pausa), último envío y un interruptor para pausar.
+- **Crear o editar** en tres pestañas: *Datos* (nombre, nota, correos, formato, UNIQ), *Intereses* (regiones y
+  provincias elegidas de la lista real del SEACE, palabras clave en etiquetas con opción de frase exacta y
+  aviso si son muy generales, entidades con autocompletado de las que tienen procesos hoy) y *Vista previa*
+  (el correo tal como lo recibiría hoy, sin enviar nada).
+- **Enviar ahora** el informe de un suscriptor, **duplicar** y **eliminar**.
+- **Deshacer** en cada cambio y **Historial** con los últimos respaldos y la actividad reciente del bot.
+- **Nunca deja el archivo roto:** valida con las mismas reglas del bot antes de guardar, comprueba que las
+  regiones existan y guarda una copia en `data/respaldos/` (40 como máximo) antes de cada cambio. Si cambias
+  el nombre de alguien, su historial de "lo ya informado" lo sigue.
+
+Los comentarios escritos a mano en `perfiles.ini` no se conservan al guardar desde el panel (la copia anterior
+sí los tiene en `data/respaldos/`). Opciones: `--puerto N`, `--minutos N` (0 = no apagarse nunca).
+
 ## Archivos
 
 | | |
 |---|---|
 | `bot.py` | orquesta: lee las fuentes, arma un informe por perfil y lo envía |
+| `empleos.py` | ofertas de empleo: Empleos Perú (API JSON) y Talento Perú/SERVIR (página JSF) |
+| `admin.py` + `admin.html` | panel local de suscriptores (agregar, editar, pausar, vista previa); ver [Panel de suscriptores](#panel-de-suscriptores) |
 | `uniq.py` | cotizaciones UNIQ y lectura del TDR/EETT |
 | `seace.py` | búsquedas en SEACE (contrataciones menores y Oportunidades de Negocio) y la regla de coincidencia |
 | `informe.py` | diseño del correo (HTML y texto) |

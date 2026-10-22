@@ -36,7 +36,8 @@ Se va a hacer, y nada más:
   - copiar el bot a $APP (propietario $USR, permisos 750; .env en 600)
   - crear $APP/venv e instalar requirements.txt DENTRO del venv
   - poner la tarea diaria ($HORA_LIMA hora de Lima) en el crontab de '$USR'
-No se toca /var/www, Nginx/Apache, PHP, MySQL ni los crontab de root/www-data. No se abren puertos.
+No se toca /var/www, Nginx/Apache, PHP, MySQL ni los crontab de root/www-data. No se abren puertos
+(el panel de suscriptores, admin.py, solo se enciende cuando tú lo pides y escucha únicamente en 127.0.0.1).
 EOF
 confirmar "¿Continuar?" || exit 1
 
@@ -52,7 +53,7 @@ echo "== 3. Archivos =="
 install -d -o "$USR" -g "$USR" -m 750 "$APP" "$APP/data" "$APP/logs"
 install -d -o "$USR" -g "$USR" -m 750 "$APP/assets"
 install -o "$USR" -g "$USR" -m 640 "$SRC"/assets/logo.png "$APP/assets/"
-install -o "$USR" -g "$USR" -m 640 "$SRC"/{bot.py,uniq.py,seace.py,informe.py,test_bot.py,requirements.txt,README.md,.env.example,perfiles.ini.example} "$APP/"
+install -o "$USR" -g "$USR" -m 640 "$SRC"/{bot.py,admin.py,admin.html,empleos.py,uniq.py,seace.py,informe.py,test_bot.py,requirements.txt,README.md,.env.example,perfiles.ini.example} "$APP/"
 if [[ ! -f $APP/.env ]]; then
   if [[ -f $SRC/.env ]]; then
     cp "$SRC/.env" "$APP/.env"
@@ -90,4 +91,6 @@ cat <<EOF
 
 Listo. Para enviar el primer correo real:
   sudo -u $USR $APP/venv/bin/python $APP/bot.py
+Para administrar suscriptores (ver README, "Panel de suscriptores"):
+  sudo -u $USR $APP/venv/bin/python $APP/admin.py
 EOF

@@ -13,6 +13,15 @@
 #   uniq            (opcional) si = recibir las cotizaciones de la UNIQ sin ponerla en entidades.
 #                   Por defecto no: quien no sigue a la UNIQ no la recibe
 #   completo        si / no: informe entero cada día, o lo ya informado resumido (por defecto si)
+#   pausado         si = no se le envía nada hasta que lo quites (por defecto no)
+#   nota            texto libre para ti (no sale en el correo)
+#   empleo_palabras   (opcional) palabras del puesto para ofertas de empleo (Empleos Perú y Talento Perú/SERVIR);
+#                     se buscan en el título. Mismas comillas que palabras_clave
+#   empleo_regiones   (opcional) dónde buscar empleo (CUSCO o APURIMAC/ABANCAY); vacío = las regiones de arriba
+#   empleo_sueldo_min (opcional) sueldo mínimo mensual en soles, p. ej. 3000. Con cualquiera de estas tres claves
+#                     el bloque recibe la sección "Ofertas de empleo"
+#
+# Puedes administrar todo esto sin editar el archivo con el panel: python admin.py (ver README).
 #
 # Lo NUEVO es propio de cada bloque: a cada uno se le marca lo que no vio en su último correo.
 # Las fuentes se consultan una sola vez aunque haya varios bloques.

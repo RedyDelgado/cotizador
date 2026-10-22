@@ -190,6 +190,8 @@ consultas = []
 class SesionFalsa:
     def get(self, url, params=None, **kw):
         consultas.append(url)
+        if "listar-archivos-contrato" in url:
+            return Resp([{"idContratoArchivo": 7}])
         if "listar-completo" in url:
             if str(params["id_contrato"]) == "666":
                 raise RuntimeError("portal caído")
@@ -209,11 +211,12 @@ seace.completar_lugares(SesionFalsa(), lista, cache, ahora)
 assert lista[0]["lugar"] == "CUSCO/LA CONVENCION/SANTA ANA"            # varios ítems del mismo lugar: uno solo
 assert lista[1]["lugar"] == "APURIMAC/ANDAHUAYLAS/SAN JERONIMO"        # procesos: el lugar del ítem, no el de la entidad
 assert lista[2]["lugar"] == "PUNO/PUNO/PUNO" and cache["m-5"]["v"] == "2026-09-28"  # desde la caché, sin consultar
-assert lista[3]["lugar"] == "" and "m-666" not in cache                 # falla: sin lugar y sin guardarlo
-assert "lugar" not in lista[4] and "p-viejo" not in cache and len(consultas) == 3  # UNIQ no se toca; poda >45 días
+assert lista[3]["lugar"] == "" and "l" not in cache["m-666"]          # falla: sin lugar y sin guardarlo (se reintenta mañana)
+assert lista[0]["bases"].endswith("/7") and lista[2]["bases"].endswith("/7") and "bases" not in lista[1]  # requerimiento solo en menores
+assert "lugar" not in lista[4] and "p-viejo" not in cache and len(consultas) == 6  # UNIQ no se toca; poda >45 días
 consultas.clear()
 seace.completar_lugares(SesionFalsa(), [p("m-1"), p("p-2")], cache, ahora)
-assert consultas == [] and set(cache) == {"m-1", "p-2", "m-5"}
+assert consultas == [] and set(cache) == {"m-1", "p-2", "m-5", "m-666"}
 
 # Índice por búsqueda y aviso de correo largo.
 casos = [("cemento", [dict(procesos[0], nuevo=True), dict(procesos[0], id="p-2", nuevo=False)]), ("fierro", [])]
@@ -291,4 +294,184 @@ asunto, texto, html = informe.construir_informe(ahora, [], [], [], [("SEACE · E
 assert "1 proceso nuevo" in asunto and "UNIQ" not in asunto, asunto
 assert "Cotizaciones UNIQ" not in html and "Coincidencias por palabra clave" not in html and "Palabras clave" not in html
 assert "Entidades que sigues" in html and "UNIQ" not in texto and "COINCIDENCIAS" not in texto
+
+# Empleos: SERVIR (HTML de la página), Empleos Perú (JSON), filtros por lugar / palabra / sueldo y el informe.
+import empleos
+
+
+def bloque_servir(titulo, entidad, lugar, nro, vac, sueldo, ini, fin):
+    campo = '<div class="row"><span class="sub-titulo">{}:</span>&nbsp; <span class="detalle-sp">{}\n\t</span></div>'
+    return ('<div class="col-sm-12 titulo-vacante"><label>' + titulo + '</label></div><span class="detalle-sp"><b>' + entidad + '</b></span>'
+            + campo.format("Ubicación", lugar) + campo.format("Número de Convocatoria", nro) + campo.format("Cantidad de Vacantes", vac)
+            + campo.format("Remuneración", sueldo) + campo.format("Fecha Inicio de\n\t\tPublicación", ini) + campo.format("Fecha Fin de Publicación", fin))
+
+
+pagina = ('<label class="control-label btn-paginator-cnt">Página 1 de 19</label>'
+          + bloque_servir("INGENIERO CIVIL IV", "MUNICIPALIDAD DISTRITAL DE ECHARATI", "CUSCO - ECHARATI", "276-6", "2", " S/. 4,500.00 ", "21/10/2026 ", "03/11/2026 ")
+          + bloque_servir("ASISTENTE ADMINISTRATIVO", "UGEL LA CONVENCION", "APURIMAC - ABANCAY", "12-1", "1", "A convenir", "20/10/2026", "30/10/2026")
+          + '<button id="frmLstOfertsLabo:j_idt62" class="x btn-paginator"><span>Sig.</span></button>')
+servir_ofertas = empleos.ofertas_de_pagina(pagina)
+assert [o["titulo"] for o in servir_ofertas] == ["INGENIERO CIVIL IV", "ASISTENTE ADMINISTRATIVO"]
+civil, asistente = servir_ofertas
+assert civil["lugar"] == "CUSCO/ECHARATI" and civil["sueldo_min"] == 4500 and civil["sueldo"] == "S/ 4,500" and civil["vacantes"] == "2"
+assert civil["publicado"] == "2026-10-21" and civil["cierre"].day == 3 and civil["cierre"].tzinfo is not None and civil["id"].startswith("s-")
+assert asistente["sueldo_max"] is None and asistente["sueldo"] == "" and civil["id"] != asistente["id"]
+assert empleos._paginas(pagina) == (1, 19) and empleos._boton_siguiente(pagina) == "frmLstOfertsLabo:j_idt62"
+assert empleos.numero("S/. 3,651.00") == 3651 and empleos.numero("A convenir") is None
+
+lugares = {"08": "CUSCO", "0801": "CUSCO", "080101": "CUSCO", "0807": "LA CONVENCION", "080701": "SANTA ANA", "03": "APURIMAC",
+           "0301": "ABANCAY", "030101": "ABANCAY", "080709": "ECHARATI"}
+lugares["0807"] = "LA CONVENCION"
+fila_mtpe = {"id": "abc", "positionTitle": "Conductor de Retroexcavadora", "location": {"DEPARTMENT": "08", "PROVINCE": "0807", "DISTRICT": "080701"},
+             "companyName": "RIHOUSE S.A.C", "displaySalary": True, "datePosted": "2026-10-21", "contractType": {"name": "Plazo fijo"},
+             "hoursPerWeek": {"name": "Tiempo completo"}, "educationDegree": {"name": "Secundaria completa"},
+             "offeredRemunerationPackages": [{"minimumAmount": 1400, "maximumAmount": 1599, "type": "1400-1599"}]}
+mtpe_oferta = empleos.oferta_mtpe(fila_mtpe, lugares)
+assert mtpe_oferta["lugar"] == "CUSCO/LA CONVENCION/SANTA ANA" and mtpe_oferta["sueldo"] == "S/ 1,400 – S/ 1,599" and mtpe_oferta["sueldo_max"] == 1599
+assert mtpe_oferta["url"].endswith("jobId=abc") and "Plazo fijo" in mtpe_oferta["detalle"]
+assert empleos.sueldo_mtpe({"displaySalary": False, "offeredRemunerationPackages": [{"type": "A"}]}) == (None, None, "")
+assert empleos.sueldo_mtpe({"offeredRemunerationPackages": [{"minimumAmount": 0, "maximumAmount": 1230, "type": "<=1230"}]})[2] == "Hasta S/ 1,230"
+assert empleos.sueldo_mtpe({"offeredRemunerationPackages": [{"minimumAmount": 10000, "type": ">=10000"}]})[1] == float("inf")
+provincia_de = empleos.provincias_de_distritos(lugares)
+assert provincia_de[("CUSCO", "ECHARATI")] == "LA CONVENCION" and provincia_de[("APURIMAC", "ABANCAY")] == "ABANCAY"
+
+todas = [civil, asistente, mtpe_oferta]
+# región: CUSCO trae a todos los de Cusco; con provincia, SERVIR se resuelve por su distrito
+assert [o["titulo"] for _, i in empleos.agrupar(todas, [], ["CUSCO"], set(), None, provincia_de) for o in i] == \
+    ["INGENIERO CIVIL IV", "Conductor de Retroexcavadora"]
+assert [o["titulo"] for _, i in empleos.agrupar(todas, [], ["CUSCO/LA CONVENCION"], set(), None, provincia_de) for o in i] == \
+    ["INGENIERO CIVIL IV", "Conductor de Retroexcavadora"]
+assert [o["titulo"] for _, i in empleos.agrupar(todas, [], ["APURIMAC/ABANCAY"], set(), None, provincia_de) for o in i] == ["ASISTENTE ADMINISTRATIVO"]
+# sueldo mínimo: filtra lo que paga menos; lo que no dice sueldo se deja ver
+assert [o["titulo"] for _, i in empleos.agrupar(todas, [], [], set(), 3000, provincia_de) for o in i] == ["INGENIERO CIVIL IV", "ASISTENTE ADMINISTRATIVO"]
+# palabras clave sobre el título; una oferta sale solo en la primera; lo ya visto no es nuevo
+g = empleos.agrupar(todas, ["ingeniero", "civil", '"asistente administrativo"'], [], {civil["id"]}, None, provincia_de)
+assert [(n, [o["titulo"] for o in i]) for n, i in g] == [("ingeniero", ["INGENIERO CIVIL IV"]), ("civil", []), ('"asistente administrativo"', ["ASISTENTE ADMINISTRATIVO"])]
+assert g[0][1][0]["nuevo"] is False and g[2][1][0]["nuevo"] is True
+assert [n for n, _ in empleos.agrupar(todas, [], ["CUSCO", "APURIMAC"], set(), None, provincia_de)] == ["CUSCO", "APURIMAC"]
+
+# perfiles.ini con empleos
+(Path(tempfile.mkdtemp()) / "x").parent
+per = con_ini("[a]\ncorreos = a@x.com\nempleo_palabras = ingeniero,\"asistente administrativo\"\nempleo_regiones = CUSCO\nempleo_sueldo_min = 3,500\n")()[0]
+assert per["empleos"] and per["empleo_palabras"] == ["ingeniero", '"asistente administrativo"'] and per["empleo_sueldo"] == 3500
+assert not con_ini("[a]\ncorreos = a@x.com\nregiones = CUSCO\n")()[0]["empleos"]
+debe_fallar("[a]\ncorreos = a@x.com\nempleo_sueldo_min = mucho\n", "empleo_sueldo_min")
+debe_fallar("[a]\ncorreos = a@x.com\nuniq = no\n", "no sigue nada")
+
+# informe: la sección sale solo si el perfil pide empleos, el asunto y los indicadores cuentan las ofertas
+grupos_empleo = [(informe.mostrar("ingeniero"), [dict(civil, nuevo=True)]), (informe.mostrar("abogado"), [])]
+asunto, texto, html = informe.construir_informe(ahora, [], [], [], [("Empleos Perú (MTPE)", True, "1648 ofertas", "x")], [], [], True, False,
+                                                grupos_empleo, informe.nota_empleos(per))
+assert "1 oferta de empleo (1 nuevas)" in asunto and "procesos nuevos" not in asunto, asunto
+assert "Ofertas de empleo" in html and "S/ 4,500" in html and "Ingeniero civil IV" in html and "Echarati" in html
+assert "OFERTAS DE EMPLEO" in texto and "https://app.servir.gob.pe" in texto and "Sin ofertas que coincidan" in html
+assert "Ofertas de empleo" not in informe.construir_informe(ahora, [], [], [], [("x", True, "", "")], [], [], True, False)[2]
+
+# Maestras del SEACE: un JSON de error (HTTP 403 disfrazado) se avisa claro y se usa la última lista buena.
+class RespuestaFalsa:
+    def __init__(self, codigo, cuerpo):
+        self.status_code, self._cuerpo, self.text = codigo, cuerpo, str(cuerpo)
+
+    def json(self):
+        return self._cuerpo
+
+
+class SesionFalsa:
+    def __init__(self, respuesta):
+        self.respuesta = respuesta
+
+    def get(self, url, timeout=0):
+        return self.respuesta
+
+
+guardadas = {}
+assert seace.maestra(SesionFalsa(RespuestaFalsa(200, [{"nom": "CUSCO"}])), "u", guardadas, "dep") == [{"nom": "CUSCO"}]
+assert seace.maestra(SesionFalsa(RespuestaFalsa(200, {"code": "403"})), "u", guardadas, "dep") == [{"nom": "CUSCO"}]
+try:
+    seace.maestra(SesionFalsa(RespuestaFalsa(200, {"code": "403", "message": "Forbidden"})), "u", {}, "dep")
+    raise AssertionError("debía fallar")
+except RuntimeError as e:
+    assert "Forbidden" in str(e)
+
+# Requerimiento de una contratación menor: enlace directo al archivo, guardado en el caché (una consulta por proceso).
+class SesionMenor:
+    def __init__(self):
+        self.llamadas = []
+
+    def get(self, url, params=None, timeout=0):
+        self.llamadas.append(url)
+        cuerpo = ([{"idContratoArchivo": 416522, "nombre": "EETT.pdf"}] if "listar-archivos-contrato" in url
+                  else {"uitContratoItemProjectionList": [{"nomDistrito": "SANTA ANA"}]})
+        return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: cuerpo})()
+
+
+menor = {"id": "m-104131", "fuente": "SEACE"}
+sesion_menor, cache_menor = SesionMenor(), {"m-104131": {"l": "CUSCO/LA CONVENCION/SANTA ANA", "v": "2026-10-20"}}  # entrada anterior, sin "r"
+seace.completar_lugares(sesion_menor, [menor], cache_menor, ahora)
+assert menor["bases"] == seace.URL_REQUERIMIENTO.format("416522") and menor["bases_etiqueta"] == "Descargar requerimiento"
+assert menor["lugar"] == "CUSCO/LA CONVENCION/SANTA ANA" and cache_menor["m-104131"]["r"] == "416522" and len(sesion_menor.llamadas) == 1  # solo pidió el archivo
+seace.completar_lugares(sesion_menor, [dict(menor)], cache_menor, ahora)
+assert len(sesion_menor.llamadas) == 1                          # ya guardado: no vuelve a consultar
+assert "Descargar requerimiento" in informe.enlace_bases(menor) and "Descargar bases" not in informe.enlace_bases(menor)
+
+# Panel de suscriptores (admin.py): crea, edita, pausa, renombra, elimina y restaura sobre un perfiles.ini temporal.
+import json
+import admin
+seace.resolver_zonas = lambda s, textos, maestras=None: []                     # sin red: las regiones se dan por buenas
+carpeta = Path(tempfile.mkdtemp())
+bot.DIR, bot.ESTADO = carpeta, carpeta / "data" / "estado.json"
+admin.INI, admin.RESPALDOS = carpeta / "perfiles.ini", carpeta / "respaldos"
+assert admin.leer() == ([], None)                               # sin archivo: lista vacía, no error
+nuevo = {"nombre": "Ana", "nota": "Cliente", "correos": ["ana@x.com", "ana@x.com", "b@x.com"], "palabras": ['"sistema académico"', "cemento, fierro"],
+         "regiones": ["CUSCO", "APURIMAC/ABANCAY"], "entidades": ["UGEL LA CONVENCION", "UNIQ"], "uniq": True, "completo": False}
+assert admin.guardar(None, nuevo) is None                       # primer guardado: no había nada que respaldar
+ana, = admin.leer()[0]
+assert ana["correos"] == ["ana@x.com", "b@x.com"] and ana["palabras"] == ['"sistema académico"', "cemento fierro"], ana
+assert ana["entidades"] == ["UGEL LA CONVENCION"] and ana["uniq"] and not ana["completo"] and not ana["pausado"]
+assert "entidades = UNIQ,UGEL LA CONVENCION" in admin.INI.read_text("utf-8")
+assert [p["nombre"] for p in bot.cargar_perfiles()] == ["Ana"]  # el bot lee lo que escribió el panel
+for malo, motivo in [({**nuevo, "nombre": "Ana"}, "Ya existe"), ({**nuevo, "nombre": "X]"}, "corchetes"), ({**nuevo, "nombre": "Luz", "correos": ["sin-arroba"]}, "correo no válido"),
+                     ({**nuevo, "nombre": "Luz", "correos": []}, "falta 'correos'"), ({**nuevo, "nombre": "Luz", "palabras": [], "regiones": [], "entidades": [], "uniq": False}, "no sigue nada")]:
+    try:
+        admin.guardar(None, malo)
+        raise AssertionError(f"debía fallar: {motivo}")
+    except ValueError as e:
+        assert motivo in str(e), (motivo, e)
+assert len(admin.leer()[0]) == 1                                # los rechazados no tocaron el archivo
+r = admin.cambiar("Ana", pausado=True)                          # pausar deja respaldo y no cambia lo demás
+assert admin.leer()[0][0]["pausado"] and (admin.RESPALDOS / r).exists()
+admin.restaurar(r)                                              # deshacer
+assert not admin.leer()[0][0]["pausado"]
+bot.guardar_estado({"perfiles": {"Ana": {"vistos": [1], "enviado": "2026-10-21T07:00"}}}, datetime(2026, 10, 21, tzinfo=uniq.LIMA))
+admin.guardar("Ana", {**nuevo, "nombre": "Ana María", "regiones": ["CUSCO"]})
+assert bot.cargar_estado()["perfiles"] == {"Ana María": {"vistos": [1], "enviado": "2026-10-21T07:00"}}  # el historial la sigue
+assert admin.leer()[0][0]["enviado"] == "2026-10-21T07:00"
+admin.guardar(None, {**nuevo, "nombre": "Luis", "correos": ["l@x.com"], "empleo_palabras": ["abogado", "contador, público"],
+                     "empleo_regiones": ["CUSCO"], "empleo_sueldo": 3000})
+luis = [p for p in admin.leer()[0] if p["nombre"] == "Luis"][0]
+assert luis["empleo_palabras"] == ["abogado", "contador público"] and luis["empleo_regiones"] == ["CUSCO"] and luis["empleo_sueldo"] == 3000
+assert "empleo_sueldo_min = 3000" in admin.INI.read_text("utf-8")
+try:
+    admin.eliminar("Nadie")
+    raise AssertionError("debía fallar")
+except ValueError:
+    pass
+r = admin.eliminar("Luis")
+assert [p["nombre"] for p in admin.leer()[0]] == ["Ana María"]
+admin.restaurar(r)
+assert [p["nombre"] for p in admin.leer()[0]] == ["Ana María", "Luis"]
+try:
+    admin.eliminar("Luis"); admin.eliminar("Ana María")
+    raise AssertionError("no debe dejar el archivo vacío")
+except ValueError:
+    pass
+for nombre in ("../x.ini", "perfiles-1.ini"):                   # solo se restauran respaldos propios
+    try:
+        admin.restaurar(nombre)
+        raise AssertionError(nombre)
+    except ValueError:
+        pass
+admin.INI.write_text("[roto\n", "utf-8")                        # un archivo roto se informa; el panel no se cae
+assert admin.leer()[0] == [] and "perfiles.ini" in admin.leer()[1]
+assert admin.lista_respaldos() and admin.lista_respaldos()[0]["perfiles"]
 print("OK")

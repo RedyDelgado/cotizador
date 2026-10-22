@@ -10,10 +10,12 @@ import base64
 import functools
 import html
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pymupdf
 
+import empleos
 import seace
 import uniq
 
@@ -23,6 +25,7 @@ MAX_FILAS = 15    # filas por palabra clave o entidad
 LIMITE_HTML = 95_000   # margen para el envoltorio del correo
 CUPO_COMPLETAS = 15    # filas completas (lo nuevo) entre TODAS las palabras clave
 CUPO_BREVES = 20       # recordatorios de una línea entre todas las palabras clave
+MAX_OFERTAS = 80        # ofertas de empleo por grupo en el correo; el resto se cuenta
 MUY_GENERAL = 60       # desde cuántos resultados se sugiere afinar una palabra clave
 
 FUENTE = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
@@ -67,6 +70,7 @@ GLIFOS = {
     "banknote": '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
     "shield-check": '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
     "scale": '<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
+    "briefcase": '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
     "layers": '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
 }
 # nombre de uso: (glifo, color)
@@ -78,6 +82,7 @@ ICONOS = {
     "pin": ("map-pin", C["azul"]),
     "pin_aviso": ("info", C["enlace"]),
     "s_uniq": ("landmark", C["navy"]),
+    "s_empleos": ("briefcase", C["navy"]),
     "s_fuentes": ("database", C["navy"]),
     "aviso": ("triangle-alert", C["rojo"]),
     "abrir": ("external-link", BLANCO),
@@ -424,7 +429,7 @@ def enlace_bases(x):
     estilo = f'style="color:{C["enlace"]};text-decoration:none;font-weight:600"'
     enlaces = []
     if x.get("bases"):
-        enlaces.append(f'<a href="{h(x["bases"])}" {estilo}>Descargar bases</a>')
+        enlaces.append(f'<a href="{h(x["bases"])}" {estilo}>{h(x.get("bases_etiqueta", "Descargar bases"))}</a>')
     if x["id"].startswith("p-") and x.get("codigo"):
         enlaces.append(f'<a href="{h(seace.BUSCADOR_SEACE3)}" {estilo}>Buscar {h(x["codigo"])} en SEACE 3.0</a>')
     if not enlaces:
@@ -580,6 +585,51 @@ def nombre_zona(zona):
     return nombre_propio(zona["region"]) + (f" · {nombre_propio(zona['provincia'])}" if zona["provincia"] else "")
 
 
+def nota_empleos(perfil):
+    """Qué se buscó en empleos, en una frase para el encabezado de la sección."""
+    regiones = perfil["empleo_regiones"] or perfil["regiones"]
+    donde = "en " + ", ".join(nombre_lugar(r).replace(" › ", " · ") for r in regiones) if regiones else "en todo el país"
+    partes = [donde]
+    if perfil["empleo_palabras"]:
+        partes.append("con " + ", ".join(mostrar(p) for p in perfil["empleo_palabras"]) + " en el título del puesto")
+    if perfil["empleo_sueldo"]:
+        partes.append(f"sueldo desde S/ {perfil['empleo_sueldo']:,}")
+    return ("Empleos Perú (sector privado y público) y Talento Perú (SERVIR, sector público), " + ", ".join(partes)
+            + ". Lo nuevo va primero; las ofertas sin sueldo publicado también se muestran.")
+
+
+def fila_empleo(i, o, ahora):
+    marcas = etiqueta("NUEVO", "azul") if o["nuevo"] else ""
+    cierre = o["cierre"]
+    if cierre and dias_hasta(cierre, ahora) <= DIAS_ALERTA:
+        marcas += etiqueta("CIERRA PRONTO", "rojo")
+    marcas += etiqueta(o["fuente"], "gris")
+    vacantes = f'{o["vacantes"]} vacante{"" if o["vacantes"] == "1" else "s"}' if o.get("vacantes") else ""
+    detalle = " · ".join(filter(None, [nombre_propio(o["entidad"]), o["detalle"], vacantes]))
+    if cierre:
+        pie, urgente = f"cierra {dia_mes(cierre)}", dias_hasta(cierre, ahora) <= DIAS_ALERTA
+    else:
+        publicada = datetime.strptime(o["publicado"], "%Y-%m-%d") if o["publicado"] else None
+        pie, urgente = (f"publicada {dia_mes(publicada)}" if publicada else ""), False
+    return fila(i, recortar(oracion(o["titulo"]), 140), o["url"], marcas, detalle, o["sueldo"] or "Sueldo no indicado", pie,
+                urgente, lugar=o["lugar"])
+
+
+def html_empleos(grupos, ahora, completo=True):
+    salida = ""
+    for nombre, items in grupos:
+        mostradas = (items if completo else [o for o in items if o["nuevo"]])[:MAX_OFERTAS]
+        filas = "".join(fila_empleo(i, o, ahora) for i, o in enumerate(mostradas))
+        if len(items) > len(mostradas):
+            filas += fila_nota(f"Y {plural(len(items) - len(mostradas), 'oferta más', 'ofertas más')} que ya se informaron o "
+                               f"no caben aquí: se ven en los portales.", url=empleos.PORTAL_MTPE, enlace="Empleos Perú")
+        if not items:
+            filas = fila_nota("Sin ofertas que coincidan hoy.", primera=True)
+        salida += subtitulo(nombre, plural(len(items), "oferta", "ofertas"))
+        salida += tabla([("Oferta", "left"), ("Sueldo", "right")] if items else [], filas)
+    return salida
+
+
 def html_uniq(convs, ahora, completo=True):
     """Modo completo: todas en fila completa. Modo resumido: las ya informadas en una línea."""
     filas = ""
@@ -619,13 +669,15 @@ def html_fuentes(fuentes):
 
 # ------------------------------------------------------------------ informe
 
-def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zonas=(), completo=True, con_uniq=True):
+def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zonas=(), completo=True, con_uniq=True,
+                      empleos=None, nota_empleo=""):
     """convs: cotizaciones UNIQ (None si la fuente falló). grupos: [(frase, [procesos])].
     fuentes: [(nombre, ok, detalle, cobertura)]. seguidas: [(entidad, [procesos])].
     zonas: [(zona, [procesos])] de REGIONES.
     completo: todo en detalle cada día, aunque el correo sea largo (Gmail muestra "Ver mensaje completo");
     si es False, lo ya informado se resume y el correo se mantiene bajo el límite de Gmail.
     con_uniq: False para quien no debe recibir las cotizaciones de la UNIQ (perfil con uniq = no).
+    empleos: [(rótulo, [ofertas])] de empleo, o None si el perfil no las pide; nota_empleo: qué se buscó.
     Devuelve (asunto, texto, html)."""
     if not con_uniq:
         convs = []
@@ -636,10 +688,16 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     nuevos = sum(x["nuevo"] for x in del_seace)
     pronto = sum(1 for x in del_seace if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA)
     uniq_nuevas = [c for c in convs or [] if c["nueva"]]
+    ofertas = [o for _, items in empleos or [] for o in items]
 
-    asunto = (f"Informe de oportunidades – {ahora:%d/%m/%Y} · "
-              + (f"{plural(len(todos), 'coincidencia', 'coincidencias')} ({sum(x['nuevo'] for x in todos)} nuevas)"
-                 if palabras else plural(nuevos, "proceso nuevo", "procesos nuevos"))
+    solo_empleos = empleos is not None and not (palabras or seguidas or zonas)  # nada que decir de SEACE
+    ofertas_nuevas = sum(o["nuevo"] for o in ofertas)
+    asunto = (f"Informe de oportunidades – {ahora:%d/%m/%Y}"
+              + ("" if solo_empleos else " · " + (f"{plural(len(todos), 'coincidencia', 'coincidencias')} "
+                                                  f"({sum(x['nuevo'] for x in todos)} nuevas)"
+                                                  if palabras else plural(nuevos, "proceso nuevo", "procesos nuevos")))
+              + (f" · {plural(len(ofertas), 'oferta de empleo', 'ofertas de empleo')} ({ofertas_nuevas} nuevas)"
+                 if empleos is not None else "")
               + (f" · UNIQ: {len(convs)} activas" if con_uniq and convs is not None else ""))
 
     partes = []
@@ -656,6 +714,9 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
                       f" ({plural(sum(x['nuevo'] for x in en_zonas), 'nuevo', 'nuevos')}).")
     if pronto:
         partes.append(f"{plural(pronto, 'proceso cierra', 'procesos cierran')} en 2 días o menos.")
+    if empleos is not None:
+        partes.append(f"En empleos hay {plural(len(ofertas), 'oferta', 'ofertas')}"
+                      f" ({plural(sum(o['nuevo'] for o in ofertas), 'nueva', 'nuevas')}).")
     if con_uniq and convs is None:
         partes.append("La página de cotizaciones de la UNIQ no respondió hoy.")
     elif con_uniq:
@@ -668,13 +729,16 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
     cuerpo += seccion(next(numero), "s_resumen", "Resumen ejecutivo")
     cifras = ([(len(todos), "Coincidencias", False)] if palabras else [])
     cifras += [(len(en_entidades) + len(en_zonas), "Entidades y regiones", False)] if (seguidas or zonas) else []
-    cifras += [(nuevos, "Nuevas", False), (pronto, "Por cerrar", True)]
+    por_cerrar = sum(1 for o in ofertas if o["cierre"] and dias_hasta(o["cierre"], ahora) <= DIAS_ALERTA)
+    cifras += [(nuevos + ofertas_nuevas, "Nuevas", False), (pronto + por_cerrar, "Por cerrar", True)]
     cifras += [(len(convs or []), "UNIQ activas", False)] if con_uniq else []
+    cifras += [(len(ofertas), "Ofertas de empleo", False)] if empleos is not None else []
     cuerpo += indicadores(cifras)
     cuerpo += f'<p style="margin:14px 0 0;font-size:14px;line-height:22px;color:{C["cuerpo"]}">{h(frase)}</p>'
     cuerpo += "<!--LARGO-->" + html_indice([("Palabras clave", [(mostrar(n), i) for n, i in grupos]),
                                             ("Entidades", [(nombre_propio(n), i) for n, i in seguidas]),
-                                            ("Regiones (sin repetir lo anterior)", [(nombre_zona(n), i) for n, i in zonas])])
+                                            ("Regiones (sin repetir lo anterior)", [(nombre_zona(n), i) for n, i in zonas]),
+                                            ("Ofertas de empleo", empleos or [])])
 
     # Primero lo corto y siempre importante (UNIQ y entidades); después lo que puede crecer mucho
     # (coincidencias y regiones), así lo que Gmail llegara a cortar es lo menos urgente.
@@ -724,11 +788,15 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
                    html_grupos(zonas, ahora, nombre_zona, vacio, cupo={"completas": 10, "nuevas_breves": 40, "breves": 15},
                                max_bytes=queda(0.80)))
 
+    if empleos is not None:
+        cuerpo += seccion(next(numero), "s_empleos", "Ofertas de empleo", nota_empleo)
+        cuerpo += html_empleos(empleos, ahora, completo)
+
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)
 
     cuerpo = cuerpo.replace("<!--LARGO-->", aviso_largo() if len(cuerpo.encode()) > LIMITE_HTML else "")
-    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas, zonas, completo, con_uniq)
+    texto = texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas, zonas, completo, con_uniq, empleos)
     return asunto, texto, envolver(cuerpo, "Informe de oportunidades")
 
 
@@ -749,13 +817,26 @@ def texto_grupos(grupos, ahora, titulo, completo=True):
             if x.get("lugar"):
                 lineas.append(f"    Ubicación: {nombre_lugar(x['lugar'])}")
             if x.get("bases"):
-                lineas.append(f"    Bases: {x['bases']}")
+                lineas.append(f"    {x.get('bases_etiqueta', 'Bases').replace('Descargar ', '').capitalize()}: {x['bases']}")
             if x["id"].startswith("p-") and x.get("codigo"):
                 lineas.append(f"    Valor referencial e historial: {seace.BUSCADOR_SEACE3} (buscar {x['codigo']})")
     return lineas
 
 
-def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), zonas=(), completo=True, con_uniq=True):
+def texto_empleos(grupos, ahora):
+    lineas = []
+    for nombre, items in grupos:
+        lineas.append(f"\n{nombre} · {plural(len(items), 'oferta', 'ofertas')}")
+        for o in items[:MAX_OFERTAS]:
+            lineas += [f"  {'[NUEVO] ' if o['nuevo'] else ''}{oracion(o['titulo'])}",
+                       f"    {o['fuente']} · {nombre_propio(o['entidad'])} · {o['sueldo'] or 'sueldo no indicado'}"
+                       + (f" · cierra {dia_mes(o['cierre'])}" if o["cierre"] else ""),
+                       f"    {nombre_lugar(o['lugar'])}", f"    {o['url']}"]
+    return lineas
+
+
+def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), zonas=(), completo=True, con_uniq=True,
+                  empleos=None):
     """Versión en texto plano (clientes sin HTML y vista previa del --dry-run)."""
     numero = iter(range(1, 10))
     lineas = ["MONITOR DE CONTRATACIONES PÚBLICAS", "Informe diario de oportunidades",
@@ -782,6 +863,8 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), z
         lineas += ["", f"{next(numero)}. COINCIDENCIAS POR PALABRA CLAVE"] + texto_grupos(grupos, ahora, mostrar, completo)
     if zonas:
         lineas += ["", f"{next(numero)}. REGIONES QUE SIGUES"] + texto_grupos(zonas, ahora, nombre_zona, completo)
+    if empleos is not None:
+        lineas += ["", f"{next(numero)}. OFERTAS DE EMPLEO"] + texto_empleos(empleos, ahora)
     lineas += ["", "FUENTES"] + [f"  {n}: {'operativa' if ok else 'SIN RESPUESTA'} · {d} · {cob}" for n, ok, d, cob in fuentes]
     return "\n".join(lineas)
 

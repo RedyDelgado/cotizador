@@ -27,6 +27,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+import empleos
 import informe
 import seace
 import uniq
@@ -73,6 +74,7 @@ class SesionConCache(requests.Session):
     def __init__(self):
         super().__init__()
         self._cache = {}
+        self.compartido = {}  # lo que cuesta varias llamadas (p. ej. SERVIR) y se reparte entre perfiles
 
     def get(self, url, params=None, **kwargs):
         clave = (url, tuple(sorted((k, str(v)) for k, v in (params or {}).items())))
@@ -220,7 +222,7 @@ def buscar_coincidencias(s, ahora, palabras, convs, estado, fuentes):
     return grupos, seace_ids, bool(errores)
 
 
-def buscar_zonas(s, ahora, regiones, estado, fuentes, cache):
+def buscar_zonas(s, ahora, regiones, estado, fuentes, cache, maestras=None):
     """[(zona, [procesos])]: todo lo abierto en las regiones/provincias de REGIONES.
     cache: distrito de Oportunidades de Negocio -> provincia (compartido por todos los perfiles)."""
     if not regiones:
@@ -228,7 +230,7 @@ def buscar_zonas(s, ahora, regiones, estado, fuentes, cache):
     vistos = set(estado.get("seace", []))
     cobertura = "Procedimientos y contrataciones menores"
     try:
-        zonas = seace.resolver_zonas(s, regiones)
+        zonas = seace.resolver_zonas(s, regiones, maestras)
     except Exception as e:
         log.exception("No se pudieron resolver las REGIONES")
         fuentes.append(("SEACE · Regiones que sigues", False, str(e) if isinstance(e, ValueError) else error_corto(e), cobertura))
@@ -274,6 +276,62 @@ def buscar_entidades(s, ahora, entidades, estado, fuentes):
     return grupos, {x["id"] for _, items in grupos for x in items}, False
 
 
+def _servir(s, codigo, texto):
+    """Ofertas de SERVIR de un departamento o de una búsqueda por texto; se piden una sola vez por ejecución."""
+    clave = ("servir", codigo, texto)
+    if clave not in s.compartido:
+        try:
+            s.compartido[clave] = empleos.buscar_servir(s, codigo, texto)
+        except Exception as e:
+            s.compartido[clave] = e
+    if isinstance(s.compartido[clave], Exception):
+        raise s.compartido[clave]
+    return s.compartido[clave]
+
+
+def buscar_empleos(s, perfil, estado, fuentes):
+    """([(rótulo, [ofertas])], ids, fallo): ofertas de Empleos Perú (MTPE) y Talento Perú (SERVIR) en las
+    regiones y con las palabras clave de empleo del perfil, y con el sueldo mínimo que pida. Sin regiones de
+    empleo se usan las del perfil; sin ninguna, todo el país. Cada fuente que falla queda anotada y no tumba el resto."""
+    palabras = perfil["empleo_palabras"]
+    regiones = perfil["empleo_regiones"] or perfil["regiones"]
+    ofertas, fallos, provincia_de = [], [], {}
+    cobertura_mtpe = "Sector privado y público · todo el país"
+    try:
+        lugares = s.compartido.get("lugares_mtpe") or s.compartido.setdefault("lugares_mtpe", empleos.lugares_mtpe(s))
+        provincia_de = s.compartido.get("provincias") or s.compartido.setdefault("provincias", empleos.provincias_de_distritos(lugares))
+        mtpe = s.compartido.get("mtpe") or s.compartido.setdefault("mtpe", empleos.ofertas_mtpe(s))
+        ofertas += mtpe
+        fuentes.append(("Empleos Perú (MTPE)", True, f"{len(mtpe)} ofertas vigentes leídas", cobertura_mtpe))
+    except Exception as e:
+        log.exception("Falló Empleos Perú")
+        fuentes.append(("Empleos Perú (MTPE)", False, error_corto(e), cobertura_mtpe))
+        fallos.append("MTPE")
+    cobertura_servir = "Sector público · convocatorias de entidades del Estado"
+    try:
+        codigos = empleos.codigos_servir(s)
+        pedidos = []  # (código de departamento, texto del perfil)
+        if regiones:
+            nombres = list(dict.fromkeys(seace.normal(r.partition("/")[0]) for r in regiones))
+            pedidos = [(codigos[n], "") for n in nombres if n in codigos]
+            desconocidas = [n for n in nombres if n not in codigos]
+            if desconocidas:
+                log.warning("SERVIR no tiene la región %s", desconocidas)
+        else:  # todo el país: 387 páginas serían demasiadas; se busca por cada palabra clave
+            pedidos = [("0", seace.consulta(p)[0]) for p in palabras if seace.consulta(p)]
+        servir = {o["id"]: o for codigo, texto in pedidos for o in _servir(s, codigo, texto)}
+        ofertas += servir.values()
+        fuentes.append(("Talento Perú (SERVIR)", True, f"{len(servir)} ofertas leídas", cobertura_servir))
+    except Exception as e:
+        log.exception("Falló Talento Perú (SERVIR)")
+        fuentes.append(("Talento Perú (SERVIR)", False, error_corto(e), cobertura_servir))
+        fallos.append("SERVIR")
+    grupos = empleos.agrupar(ofertas, palabras, regiones, set(estado.get("empleos", [])), perfil["empleo_sueldo"], provincia_de)
+    grupos = [(informe.mostrar(n) if palabras else informe.nombre_lugar(n), items) for n, items in grupos]
+    log.info("Empleos: %s", {n: len(i) for n, i in grupos})
+    return grupos, {x["id"] for _, items in grupos for x in items}, bool(fallos)
+
+
 # --------------------------------------------------------------------- envío
 
 def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjunto="informe.html"):
@@ -313,7 +371,8 @@ def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjun
 # si recibe la UNIQ y si lo quiere completo. Se definen en perfiles.ini (ver perfiles.ini.example); sin
 # ese archivo hay un solo perfil con lo que diga el .env (MAIL_TO, PALABRAS_CLAVE, ENTIDADES, REGIONES).
 
-CLAVES_PERFIL = {"correos", "palabras_clave", "entidades", "regiones", "uniq", "completo"}
+CLAVES_PERFIL = {"correos", "palabras_clave", "entidades", "regiones", "uniq", "completo", "pausado", "nota",
+                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min"}
 
 
 def lista(texto):
@@ -342,7 +401,8 @@ def cargar_perfiles():
                  "palabras": lista(os.environ.get("PALABRAS_CLAVE")),
                  "entidades": separar_uniq(lista(os.environ.get("ENTIDADES")))[0],
                  "regiones": lista(os.environ.get("REGIONES")), "uniq": True,
-                 "completo": es_si(os.environ.get("INFORME_COMPLETO"))}]
+                 "completo": es_si(os.environ.get("INFORME_COMPLETO")), "nota": "", "pausado": False,
+                 "empleo_palabras": [], "empleo_regiones": [], "empleo_sueldo": None, "empleos": False}]
     ini = configparser.ConfigParser(interpolation=None)  # sin interpolación: el % es un carácter normal
     try:
         with open(ruta, encoding="utf-8") as f:  # (ini.read ignoraría en silencio un archivo sin permiso)
@@ -352,30 +412,47 @@ def cargar_perfiles():
                          f"sudo chown {os.environ.get('USER') or 'cotizbot'}:cotizbot {ruta} && sudo chmod 600 {ruta}")
     except (configparser.Error, UnicodeDecodeError) as e:
         raise ValueError(f"perfiles.ini: {str(e).splitlines()[0]}")
-    perfiles = []
-    for nombre in ini.sections():
-        sec = ini[nombre]
-        desconocidas = sorted(set(sec) - CLAVES_PERFIL)
-        if desconocidas:
-            raise ValueError(f"perfiles.ini [{nombre}]: clave desconocida {desconocidas[0]!r} "
-                             f"(válidas: {', '.join(sorted(CLAVES_PERFIL))})")
-        correos = lista(sec.get("correos"))
-        if not correos:
-            raise ValueError(f"perfiles.ini [{nombre}]: falta 'correos'")
-        malos = [c for c in correos if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", c)]
-        if malos:
-            raise ValueError(f"perfiles.ini [{nombre}]: correo no válido: {malos[0]!r}")
-        entidades, sigue_uniq = separar_uniq(lista(sec.get("entidades")))
-        # La UNIQ se recibe solo si el perfil la pide: con "UNIQ" en entidades o con la clave antigua uniq = si.
-        perfil = {"nombre": nombre, "legacy": False, "correos": correos, "palabras": lista(sec.get("palabras_clave")),
-                  "entidades": entidades, "regiones": lista(sec.get("regiones")),
-                  "uniq": sigue_uniq or es_si(sec.get("uniq"), por_defecto=False), "completo": es_si(sec.get("completo"))}
-        if not (perfil["uniq"] or perfil["palabras"] or perfil["entidades"] or perfil["regiones"]):
-            raise ValueError(f"perfiles.ini [{nombre}]: no sigue nada (sin palabras_clave, entidades ni regiones)")
-        perfiles.append(perfil)
+    perfiles = [perfil_de_seccion(nombre, ini[nombre]) for nombre in ini.sections()]
     if not perfiles:
         raise ValueError("perfiles.ini no tiene ningún perfil (cada uno empieza con [nombre])")
     return perfiles
+
+
+def sueldo_minimo(nombre, texto):
+    """"3000" o "3,000" -> 3000; None si no hay."""
+    if not (texto or "").strip():
+        return None
+    try:
+        return int(float(texto.replace(",", "").replace("S/", "").strip()))
+    except ValueError:
+        raise ValueError(f"perfiles.ini [{nombre}]: empleo_sueldo_min tiene que ser un número (p. ej. 3000), no {texto!r}")
+
+
+def perfil_de_seccion(nombre, sec):
+    """Un bloque de perfiles.ini (o un dict con las mismas claves, como lo manda el panel) -> perfil.
+    ValueError si algo no es válido."""
+    desconocidas = sorted(set(sec) - CLAVES_PERFIL)
+    if desconocidas:
+        raise ValueError(f"perfiles.ini [{nombre}]: clave desconocida {desconocidas[0]!r} "
+                         f"(válidas: {', '.join(sorted(CLAVES_PERFIL))})")
+    correos = lista(sec.get("correos"))
+    if not correos:
+        raise ValueError(f"perfiles.ini [{nombre}]: falta 'correos'")
+    malos = [c for c in correos if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", c)]
+    if malos:
+        raise ValueError(f"perfiles.ini [{nombre}]: correo no válido: {malos[0]!r}")
+    entidades, sigue_uniq = separar_uniq(lista(sec.get("entidades")))
+    # La UNIQ se recibe solo si el perfil la pide: con "UNIQ" en entidades o con la clave antigua uniq = si.
+    perfil = {"nombre": nombre, "legacy": False, "correos": correos, "palabras": lista(sec.get("palabras_clave")),
+              "entidades": entidades, "regiones": lista(sec.get("regiones")), "nota": (sec.get("nota") or "").strip(),
+              "uniq": sigue_uniq or es_si(sec.get("uniq"), por_defecto=False), "completo": es_si(sec.get("completo")),
+              "pausado": es_si(sec.get("pausado"), por_defecto=False), "empleo_palabras": lista(sec.get("empleo_palabras")),
+              "empleo_regiones": lista(sec.get("empleo_regiones")), "empleo_sueldo": sueldo_minimo(nombre, sec.get("empleo_sueldo_min"))}
+    # Las ofertas de empleo se reciben si el bloque pide algo de ellas (palabras, regiones o un sueldo mínimo).
+    perfil["empleos"] = bool(perfil["empleo_palabras"] or perfil["empleo_regiones"] or perfil["empleo_sueldo"])
+    if not (perfil["uniq"] or perfil["palabras"] or perfil["entidades"] or perfil["regiones"] or perfil["empleos"]):
+        raise ValueError(f"perfiles.ini [{nombre}]: no sigue nada (sin palabras_clave, entidades, regiones ni empleo_*)")
+    return perfil
 
 
 def estado_de(estado, perfil):
@@ -387,13 +464,14 @@ def estado_de(estado, perfil):
 
 
 def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
-    """Informe de un perfil: (asunto, texto, html, ids_uniq, ids_seace, seace_fallo)."""
+    """Informe de un perfil: (asunto, texto, html, ids_uniq, ids_seace, seace_fallo, ids_empleos, empleos_fallo)."""
     propio = estado_de(estado, perfil)
     fuentes = []
     convs = leer_uniq(uniq_base, uniq_error, propio, fuentes) if perfil["uniq"] else None
     # Las regiones primero: son la base de las palabras clave. Con regiones, las palabras clave se buscan
     # SOLO ahí; sin regiones, en todo el país.
-    zonas, zonas_fallo = buscar_zonas(s, ahora, perfil["regiones"], propio, fuentes, estado.setdefault("ubigeos", {}))
+    zonas, zonas_fallo = buscar_zonas(s, ahora, perfil["regiones"], propio, fuentes, estado.setdefault("ubigeos", {}),
+                                      estado.setdefault("maestras", {}))
     if perfil["palabras"] and perfil["regiones"]:
         if zonas:
             candidatos = {x["id"]: x for _, items in zonas for x in items}
@@ -417,13 +495,19 @@ def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
     # Ubicación (región › provincia › distrito) de todo lo que sale en el informe; se guarda en el estado.
     todos = [x for _, items in grupos + seguidas + zonas for x in items]
     seace.completar_lugares(s, todos, estado.setdefault("lugares", {}), ahora, log)
+    if perfil["empleos"]:
+        grupos_empleo, empleo_ids, empleo_fallo = buscar_empleos(s, perfil, propio, fuentes)
+    else:
+        grupos_empleo, empleo_ids, empleo_fallo = None, set(), False
 
     if fuentes and all(not ok for _, ok, _, _ in fuentes):
         raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
     asunto, texto, cuerpo = informe.construir_informe(ahora, perfil["palabras"], convs, grupos, fuentes, seguidas, zonas,
-                                                      perfil["completo"], perfil["uniq"])
+                                                      perfil["completo"], perfil["uniq"],
+                                                      grupos_empleo, informe.nota_empleos(perfil))
     ids_uniq = sorted(c["id"] for c in convs) if convs is not None else None
-    return asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo or entidades_fallo or zonas_fallo
+    return (asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo or entidades_fallo or zonas_fallo,
+            empleo_ids, empleo_fallo)
 
 
 def destinatarios_de_alerta(perfiles):
@@ -463,11 +547,16 @@ def main():
         fallos.append(str(e))
         avisar([])
         return 1
-    if args.perfil:
+    if args.perfil:  # pedido por nombre: sale aunque esté pausado (así el panel puede probarlo)
         perfiles = [x for x in perfiles if x["nombre"].lower() == args.perfil.lower()]
         if not perfiles:
             print(f"No existe el perfil {args.perfil!r}", file=sys.stderr)
             return 1
+    else:
+        perfiles = [x for x in perfiles if not x.get("pausado")]
+        if not perfiles:
+            log.info("Todos los perfiles están pausados; no hay nada que enviar")
+            return 0
 
     try:
         estado = cargar_estado()
@@ -476,7 +565,8 @@ def main():
         for perfil in perfiles:
             try:
                 log.info("Perfil %s", perfil["nombre"])
-                asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo = generar(perfil, s, ahora, estado, uniq_base, uniq_error)
+                asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo, empleo_ids, empleo_fallo = generar(
+                    perfil, s, ahora, estado, uniq_base, uniq_error)
                 if args.html_preview:
                     ficha = re.sub(r"\W+", "_", perfil["nombre"])
                     archivo = DIR / ("preview.html" if len(perfiles) == 1 else f"preview_{ficha}.html")
@@ -494,6 +584,9 @@ def main():
                     if ids_uniq is not None:
                         propio["vistos"] = ids_uniq
                     propio["seace"] = sorted(seace_ids | (set(propio.get("seace", [])) if seace_fallo else set()))
+                    if perfil["empleos"]:
+                        propio["empleos"] = sorted(empleo_ids | (set(propio.get("empleos", [])) if empleo_fallo else set()))
+                    propio["enviado"] = ahora.isoformat(timespec="minutes")  # lo muestra el panel (admin.py)
                     guardar_estado(estado, ahora)
             except Exception:
                 log.exception("No se pudo generar o enviar el informe de [%s]", perfil["nombre"])
