@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\BotController;
+use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\SubscriberController;
 use Illuminate\Support\Facades\Route;
 
@@ -8,6 +9,8 @@ use Illuminate\Support\Facades\Route;
 Route::middleware(['auth:sanctum', 'abilities:subscribers', 'throttle:120,1'])->group(function () {
     Route::apiResource('subscribers', SubscriberController::class)->names('api.subscribers');
     Route::patch('subscribers/{subscriber}/pause', [SubscriberController::class, 'pause']);
+    Route::get('subscribers/{subscriber}/payments', [PaymentController::class, 'index']);
+    Route::post('subscribers/{subscriber}/payments', [PaymentController::class, 'store']);
 });
 
 // Bot de Python: token con la habilidad "bot" (solo lee los perfiles activos y avisa lo que envió).

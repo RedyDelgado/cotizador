@@ -20,6 +20,9 @@ x-bot: &bot
     PANEL_URL: http://panel:8000
     PANEL_TOKEN: ${PANEL_BOT_TOKEN:-token-local-del-bot}
     # Mailpit en vez de Gmail
+    # Telegram de mentira (docker/telegram_falso.py). Con uno real: TELEGRAM_BOT_TOKEN y TELEGRAM_API_URL=https://api.telegram.org
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-token-falso-local}
+    TELEGRAM_API_URL: ${TELEGRAM_API_URL:-http://telegram-falso:8081}
     SMTP_HOST: mailpit
     SMTP_PORT: "1025"
     SMTP_SEGURO: "no"
@@ -39,7 +42,10 @@ services:
   panel:
     build: ./panel
     image: neoestado-panel
-    environment:
+    environment: &entorno-panel
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-token-falso-local}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-neoestado_local_bot}
+      TELEGRAM_API_URL: ${TELEGRAM_API_URL:-http://telegram-falso:8081}
       APP_NAME: NEOESTADO
       APP_ENV: local
       APP_DEBUG: "true"
@@ -53,6 +59,27 @@ services:
       - ./docker-data/panel:/data
     ports:
       - "127.0.0.1:8000:8000"   # solo tu equipo; nunca la red
+    restart: unless-stopped
+
+  # Tareas programadas del panel: atiende a Telegram cada minuto y avisa los vencimientos cada día
+  planificador:
+    image: neoestado-panel
+    command: ["php", "artisan", "schedule:work"]
+    environment:
+      <<: *entorno-panel
+      SKIP_MIGRATE: "1"   # las migraciones las corre el panel
+    volumes:
+      - ./docker-data/panel:/data
+    depends_on:
+      - panel
+    restart: unless-stopped
+
+  # Telegram de mentira para probar el enlace y los envíos sin crear un bot real
+  telegram-falso:
+    image: neoestado-local
+    entrypoint: ["python", "docker/telegram_falso.py"]
+    ports:
+      - "127.0.0.1:8081:8081"
     restart: unless-stopped
 
   # Informes a demanda; no arranca con "up": docker compose run --rm bot [comando]

@@ -1,8 +1,7 @@
 <?php
 
-use Illuminate\Foundation\Inspiring;
-use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
 
-Artisan::command('inspire', function () {
-    $this->comment(Inspiring::quote());
-})->purpose('Display an inspiring quote');
+// Con "php artisan schedule:work" (o un cron por minuto con "schedule:run") corre solo.
+Schedule::command('telegram:poll --once')->everyMinute()->withoutOverlapping();
+Schedule::command('billing:reminders')->dailyAt('09:00');

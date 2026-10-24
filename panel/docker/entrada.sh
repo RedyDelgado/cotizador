@@ -8,6 +8,8 @@ if [ -z "$APP_KEY" ]; then
   [ -f /data/app.key ] || php -r 'echo "base64:".base64_encode(random_bytes(32));' > /data/app.key
   export APP_KEY="$(cat /data/app.key)"
 fi
-php artisan migrate --force
-php artisan db:seed --force
+if [ -z "$SKIP_MIGRATE" ]; then
+  php artisan migrate --force
+  php artisan db:seed --force
+fi
 exec "$@"

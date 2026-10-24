@@ -65,6 +65,7 @@ abstract class SubscriberRequest extends FormRequest
             'job_min_salary' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             'full_report' => ['boolean'],
             'paused' => ['boolean'],
+            'telegram_chat_id' => ['nullable', 'regex:/^-?\d{4,20}$/'],
         ];
     }
 
@@ -96,7 +97,7 @@ abstract class SubscriberRequest extends FormRequest
     public function attributes(): array
     {
         return [
-            'name' => 'nombre', 'note' => 'nota', 'emails' => 'correos', 'keywords' => 'palabras clave',
+            'telegram_chat_id' => 'chat de Telegram', 'name' => 'nombre', 'note' => 'nota', 'emails' => 'correos', 'keywords' => 'palabras clave',
             'entities' => 'entidades', 'regions' => 'regiones', 'job_keywords' => 'palabras del puesto',
             'job_regions' => 'regiones de empleo', 'job_min_salary' => 'sueldo mínimo',
         ];

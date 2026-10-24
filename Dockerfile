@@ -8,6 +8,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot.py admin.py admin.html empleos.py informe.py seace.py uniq.py maestras.json test_bot.py perfiles.ini.example ./
+COPY docker/telegram_falso.py ./docker/telegram_falso.py
 COPY assets ./assets
 COPY docker/entrada.sh /entrada.sh
 

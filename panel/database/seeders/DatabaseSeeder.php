@@ -33,6 +33,7 @@ class DatabaseSeeder extends Seeder
                 'keywords' => ['cemento', 'fierro', '"sistema académico"'],
                 'regions' => ['CUSCO'],
                 'include_uniq' => true,
+                'paid_until' => today()->addDays(15),
             ]);
             Subscriber::firstOrCreate(['name' => 'demo empleos'], [
                 'note' => 'Demostración: ofertas de empleo',
@@ -41,6 +42,7 @@ class DatabaseSeeder extends Seeder
                 'job_regions' => ['CUSCO'],
                 'job_min_salary' => 3000,
                 'full_report' => false,
+                'paid_until' => today()->addDays(15),
             ]);
         }
     }

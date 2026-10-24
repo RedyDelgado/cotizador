@@ -1,8 +1,8 @@
 @extends('layouts.app')
 
 @section('content')
-    <div class="mb-5 grid grid-cols-3 gap-3">
-        @foreach ([[$total, 'Suscriptores'], [$active, 'Activos'], [$total - $active, 'En pausa']] as [$n, $label])
+    <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        @foreach ([[$total, 'Suscriptores'], [$paying, 'Con servicio vigente'], [$expiring, 'Por vencer o vencen hoy'], [config('panel.currency').' '.number_format((float) $income, 2), 'Cobrado este mes']] as [$n, $label])
             <div class="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div class="text-2xl font-semibold text-marca-950">{{ $n }}</div>
                 <div class="text-sm text-slate-500">{{ $label }}</div>
@@ -27,8 +27,15 @@
                 <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center gap-2">
                         <a href="{{ route('subscribers.edit', $s) }}" class="font-semibold hover:text-marca-700">{{ $s->name }}</a>
-                        <span class="rounded-full px-2 py-0.5 text-xs font-semibold {{ $s->paused ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800' }}">
-                            {{ $s->paused ? 'En pausa' : 'Activo' }}
+                        @php
+                            $billing = $s->billingStatus();
+                        @endphp
+                        <span class="rounded-full px-2 py-0.5 text-xs font-semibold {{ $s->paused ? 'bg-amber-100 text-amber-800' : ['ok' => 'bg-emerald-100 text-emerald-800', 'expiring' => 'bg-amber-100 text-amber-800', 'expired' => 'bg-red-100 text-red-800', 'none' => 'bg-slate-200 text-slate-700'][$billing] }}">
+                            @if ($s->paused) En pausa
+                            @elseif ($billing === 'none') Sin pagos
+                            @elseif ($billing === 'expired') Venció {{ $s->paid_until->format('d/m') }}
+                            @else Vigente · {{ $s->daysLeft() === 0 ? 'último día' : $s->daysLeft().' d' }}
+                            @endif
                         </span>
                     </div>
                     <div class="truncate text-sm text-slate-500">{{ $s->note ?: implode(', ', $s->emails) }}</div>
@@ -40,6 +47,7 @@
                                 count($s->keywords ?? []) ? count($s->keywords).' '.(count($s->keywords) === 1 ? 'palabra' : 'palabras') : null,
                                 count($s->entities ?? []) ? count($s->entities).' '.(count($s->entities) === 1 ? 'entidad' : 'entidades') : null,
                                 $s->include_uniq ? 'UNIQ' : null,
+                                $s->telegram_chat_id ? 'Telegram' : null,
                                 $s->hasJobs() ? 'Empleos'.($s->job_min_salary ? ' desde S/ '.number_format($s->job_min_salary) : '') : null,
                                 $s->full_report ? null : 'Resumido',
                             ]);
@@ -52,6 +60,7 @@
                 <div class="flex w-full items-center justify-between gap-2 sm:w-auto sm:flex-col sm:items-end">
                     <span class="text-xs text-slate-500">{{ $s->last_sent_at ? 'Último envío: '.$s->last_sent_at->translatedFormat('j M, H:i') : 'Aún sin envíos' }}</span>
                     <div class="flex items-center gap-1">
+                        <a href="{{ route('subscribers.payments.index', $s) }}" class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Cobros</a>
                         <form method="POST" action="{{ route('subscribers.toggle', $s) }}">@csrf @method('PATCH')
                             <button class="rounded-lg px-2.5 py-1.5 text-sm hover:bg-marca-50">{{ $s->paused ? 'Reanudar' : 'Pausar' }}</button>
                         </form>

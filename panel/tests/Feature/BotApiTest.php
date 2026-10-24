@@ -19,6 +19,7 @@ class BotApiTest extends TestCase
             'keywords' => ['cemento', '"sistema académico"'], 'entities' => ['UGEL LA CONVENCION'],
             'regions' => ['CUSCO', 'APURIMAC/ABANCAY'], 'include_uniq' => true,
             'job_keywords' => ['ingeniero'], 'job_regions' => ['CUSCO'], 'job_min_salary' => 3000, 'full_report' => false,
+            'paid_until' => today()->addDays(5), 'telegram_chat_id' => '4242',
         ]);
         Subscriber::create(['name' => 'Pausado', 'emails' => ['p@example.com'], 'keywords' => ['x'], 'paused' => true]);
         Sanctum::actingAs(User::factory()->create(), ['bot']);
@@ -38,12 +39,14 @@ class BotApiTest extends TestCase
                 'empleo_regiones' => 'CUSCO',
                 'empleo_sueldo_min' => '3000',
                 'completo' => 'no',
+                'telegram' => '4242',
+                'vence' => today()->addDays(5)->toDateString(),
             ]);
     }
 
     public function test_renaming_keeps_the_bot_state_key(): void
     {
-        $s = Subscriber::create(['name' => 'Ana', 'emails' => ['a@example.com'], 'keywords' => ['x']]);
+        $s = Subscriber::create(['name' => 'Ana', 'emails' => ['a@example.com'], 'keywords' => ['x'], 'paid_until' => today()->addDay()]);
         $s->update(['name' => 'Ana María']);
         Sanctum::actingAs(User::factory()->create(), ['bot']);
 
@@ -52,7 +55,7 @@ class BotApiTest extends TestCase
 
     public function test_exports_active_subscribers_as_perfiles_ini(): void
     {
-        Subscriber::create(['name' => 'Ana', 'emails' => ['a@example.com'], 'keywords' => ['cemento'], 'regions' => ['CUSCO']]);
+        Subscriber::create(['name' => 'Ana', 'emails' => ['a@example.com'], 'keywords' => ['cemento'], 'regions' => ['CUSCO'], 'paid_until' => today()->addDay()]);
         Subscriber::create(['name' => 'Pausado', 'emails' => ['p@example.com'], 'keywords' => ['x'], 'paused' => true]);
         $path = tempnam(sys_get_temp_dir(), 'ini');
 

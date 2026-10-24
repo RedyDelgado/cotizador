@@ -4,18 +4,25 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class Subscriber extends Model
 {
     protected $fillable = [
         'name', 'state_key', 'note', 'emails', 'keywords', 'entities', 'regions', 'include_uniq',
         'job_keywords', 'job_regions', 'job_min_salary', 'full_report', 'paused', 'last_sent_at',
+        'paid_until', 'telegram_chat_id', 'telegram_link_code', 'last_reminder',
     ];
 
     protected static function booted(): void
     {
-        // la clave del estado del bot nace con el nombre y ya no cambia al renombrar
-        static::creating(fn (self $s) => $s->state_key ??= $s->name);
+        static::creating(function (self $subscriber) {
+            // la clave del estado del bot nace con el nombre y ya no cambia al renombrar
+            $subscriber->state_key ??= $subscriber->name;
+            $subscriber->telegram_link_code ??= Str::upper(Str::random(8));
+        });
     }
 
     protected function casts(): array
@@ -32,12 +39,24 @@ class Subscriber extends Model
             'paused' => 'boolean',
             'job_min_salary' => 'integer',
             'last_sent_at' => 'datetime',
+            'paid_until' => 'date',
         ];
+    }
+
+    public function payments(): HasMany
+    {
+        return $this->hasMany(Payment::class)->latest('paid_on')->latest('id');
     }
 
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('paused', false);
+    }
+
+    /** Lo que se le envía hoy: no está en pausa y su pago sigue vigente (el último día cuenta). */
+    public function scopeDeliverable(Builder $query): Builder
+    {
+        return $query->where('paused', false)->whereDate('paid_until', '>=', today());
     }
 
     /** Busca por nombre, correo o cualquier interés (los arrays JSON se guardan como texto). */
@@ -56,5 +75,53 @@ class Subscriber extends Model
     public function hasJobs(): bool
     {
         return ! empty($this->job_keywords) || ! empty($this->job_regions) || $this->job_min_salary;
+    }
+
+    /** Días que le quedan (0 = hoy es su último día; negativo = ya venció; null = nunca pagó). */
+    public function daysLeft(): ?int
+    {
+        return $this->paid_until ? (int) today()->diffInDays($this->paid_until, false) : null;
+    }
+
+    /** none (nunca pagó), expired, expiring (le quedan pocos días) u ok. */
+    public function billingStatus(): string
+    {
+        $left = $this->daysLeft();
+
+        return match (true) {
+            $left === null => 'none',
+            $left < 0 => 'expired',
+            $left <= config('panel.expiring_days') => 'expiring',
+            default => 'ok',
+        };
+    }
+
+    /**
+     * Registra un pago y extiende el servicio: si aún está vigente, los días se suman al final del período actual;
+     * si venció (o nunca pagó), cuentan desde hoy.
+     *
+     * @param  array{amount?: float|int|string, days?: int, method: string, reference?: ?string, paid_on?: mixed, note?: ?string}  $data
+     */
+    public function registerPayment(array $data): Payment
+    {
+        return DB::transaction(function () use ($data): Payment {
+            $days = (int) ($data['days'] ?? config('panel.days'));
+            $start = $this->paid_until && $this->paid_until->gte(today()) ? $this->paid_until->copy()->addDay() : today();
+            $end = $start->copy()->addDays($days - 1);
+
+            $payment = $this->payments()->create([
+                'amount' => $data['amount'] ?? config('panel.price'),
+                'days' => $days,
+                'method' => $data['method'],
+                'reference' => $data['reference'] ?? null,
+                'paid_on' => $data['paid_on'] ?? today(),
+                'period_start' => $start,
+                'period_end' => $end,
+                'note' => $data['note'] ?? null,
+            ]);
+            $this->update(['paid_until' => $end, 'last_reminder' => null]);
+
+            return $payment;
+        });
     }
 }

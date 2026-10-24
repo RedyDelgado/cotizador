@@ -382,7 +382,7 @@ def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjun
 # ese archivo hay un solo perfil con lo que diga el .env (MAIL_TO, PALABRAS_CLAVE, ENTIDADES, REGIONES).
 
 CLAVES_PERFIL = {"correos", "palabras_clave", "entidades", "regiones", "uniq", "completo", "pausado", "nota",
-                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min", "clave"}
+                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min", "clave", "telegram", "vence"}
 
 
 def lista(texto):
@@ -433,6 +433,23 @@ def perfiles_del_panel():
     return perfiles
 
 
+def enviar_telegram(chat_id, texto):
+    """Manda el resumen al chat de Telegram del suscriptor. Es un extra del correo: si falla, solo se anota."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not (token and chat_id):
+        return False
+    base = os.environ.get("TELEGRAM_API_URL", "https://api.telegram.org").rstrip("/")
+    try:
+        r = requests.post(f"{base}/bot{token}/sendMessage", timeout=20, json={
+            "chat_id": chat_id, "text": texto, "parse_mode": "HTML", "disable_web_page_preview": True})
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        # el error de requests puede traer la URL con el token: se anota solo el tipo
+        log.warning("No se pudo enviar el resumen por Telegram a %s: %s", chat_id, type(e).__name__)
+        return False
+
+
 def avisar_envio_al_panel(perfil):
     """Anota en el panel que ya se envió el informe (su "último envío"). Si falla no importa: el correo ya salió."""
     if perfil.get("legacy") or not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
@@ -473,6 +490,16 @@ def cargar_perfiles():
     return perfiles
 
 
+def fecha_vence(nombre, texto):
+    """"2026-11-08" -> date; None si no viene (perfiles.ini no cobra: solo el panel lo manda)."""
+    if not (texto or "").strip():
+        return None
+    try:
+        return datetime.strptime(texto.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError(f"perfiles.ini [{nombre}]: vence tiene que ser una fecha AAAA-MM-DD, no {texto!r}")
+
+
 def sueldo_minimo(nombre, texto):
     """"3000" o "3,000" -> 3000; None si no hay."""
     if not (texto or "").strip():
@@ -502,6 +529,7 @@ def perfil_de_seccion(nombre, sec):
               "entidades": entidades, "regiones": lista(sec.get("regiones")), "nota": (sec.get("nota") or "").strip(),
               "uniq": sigue_uniq or es_si(sec.get("uniq"), por_defecto=False), "completo": es_si(sec.get("completo")),
               "pausado": es_si(sec.get("pausado"), por_defecto=False), "clave": (sec.get("clave") or "").strip(),
+              "telegram": (sec.get("telegram") or "").strip(), "vence": fecha_vence(nombre, sec.get("vence")),
               "empleo_palabras": lista(sec.get("empleo_palabras")),
               "empleo_regiones": lista(sec.get("empleo_regiones")), "empleo_sueldo": sueldo_minimo(nombre, sec.get("empleo_sueldo_min"))}
     # Las ofertas de empleo se reciben si el bloque pide algo de ellas (palabras, regiones o un sueldo mínimo).
@@ -521,7 +549,8 @@ def estado_de(estado, perfil):
 
 
 def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
-    """Informe de un perfil: (asunto, texto, html, ids_uniq, ids_seace, seace_fallo, ids_empleos, empleos_fallo)."""
+    """Informe de un perfil: (asunto, texto, html, ids_uniq, ids_seace, seace_fallo, ids_empleos, empleos_fallo,
+    resumen para Telegram)."""
     propio = estado_de(estado, perfil)
     fuentes = []
     convs = leer_uniq(uniq_base, uniq_error, propio, fuentes) if perfil["uniq"] else None
@@ -567,8 +596,9 @@ def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
                                                       perfil["completo"], perfil["uniq"],
                                                       grupos_empleo, informe.nota_empleos(perfil), enlaces_empleo)
     ids_uniq = sorted(c["id"] for c in convs) if convs is not None else None
+    resumen_telegram = informe.texto_telegram(ahora, perfil, convs, grupos, seguidas, zonas, grupos_empleo)
     return (asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo or entidades_fallo or zonas_fallo,
-            empleo_ids, empleo_fallo)
+            empleo_ids, empleo_fallo, resumen_telegram)
 
 
 def destinatarios_de_alerta(perfiles):
@@ -626,7 +656,7 @@ def main():
         for perfil in perfiles:
             try:
                 log.info("Perfil %s", perfil["nombre"])
-                asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo, empleo_ids, empleo_fallo = generar(
+                asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo, empleo_ids, empleo_fallo, resumen_telegram = generar(
                     perfil, s, ahora, estado, uniq_base, uniq_error)
                 if args.html_preview:
                     ficha = re.sub(r"\W+", "_", perfil["nombre"])
@@ -649,6 +679,8 @@ def main():
                         propio["empleos"] = sorted(empleo_ids | (set(propio.get("empleos", [])) if empleo_fallo else set()))
                     propio["enviado"] = ahora.isoformat(timespec="minutes")  # lo muestra el panel (admin.py)
                     guardar_estado(estado, ahora)
+                    if perfil.get("telegram") and enviar_telegram(perfil["telegram"], resumen_telegram):
+                        log.info("Resumen enviado por Telegram a [%s]", perfil["nombre"])
                     avisar_envio_al_panel(perfil)
             except Exception:
                 log.exception("No se pudo generar o enviar el informe de [%s]", perfil["nombre"])

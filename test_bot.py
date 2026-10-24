@@ -63,7 +63,7 @@ assert seace.consulta("sistema de seguridad ciudadana") == ["seguridad"]
 assert seace.consulta("maíz") == ["maíz", "maiz"] and seace.consulta("sistema académico") == ["académic", "academic"]
 assert seace.limpio("PROYECTO  ¿ESTADIO¿ DV CAJABAMBA ¿ HUAMACHUCO") == 'PROYECTO "ESTADIO" DV CAJABAMBA – HUAMACHUCO'
 # Oportunidades de Negocio: una fila por ítem -> un proceso; los de registro cerrado no salen.
-from datetime import datetime
+from datetime import date, datetime
 ahora = datetime(2026, 9, 28, 12, 0, tzinfo=uniq.LIMA)
 fila = {"idProcedimiento": 7, "detTipoProceso": "Subasta Inversa Electrónica", "nomenclatura": "SIE-SIE-1-2026-X-1",
         "sintesisProceso": "ADQUISICIÓN DE CEMENTO", "detEntidad": "MUNICIPALIDAD PROVINCIAL DE LA CONVENCION",
@@ -472,6 +472,50 @@ try:
 finally:
     bot.requests.get = requests_get
     del os.environ["PANEL_URL"], os.environ["PANEL_TOKEN"]
+
+# Telegram: resumen corto con lo urgente y lo nuevo, aviso de vencimiento, y envío que nunca tumba el informe.
+hoy_tg = datetime(2026, 10, 25, 7, 0, tzinfo=uniq.LIMA)
+urgente = dict(procesos[0], id="p-90", titulo="ADQUISICION DE CEMENTO", entidad="MUNICIPALIDAD DISTRITAL DE ECHARATI", url="https://x/90",
+               nuevo=False, abierta=True, cierre=datetime(2026, 10, 26, 12, 0, tzinfo=uniq.LIMA))
+nuevo_tg = dict(procesos[0], id="p-91", titulo="SERVICIO DE VIGILANCIA", entidad="UGEL LA CONVENCION", url="https://x/91",
+                nuevo=True, abierta=True, cierre=datetime(2026, 11, 20, 12, 0, tzinfo=uniq.LIMA))
+perfil_tg = {"vence": date(2026, 10, 27)}
+resumen_tg = informe.texto_telegram(hoy_tg, perfil_tg, [], [("cemento", [urgente, nuevo_tg, dict(nuevo_tg)])], [], [], [("«abogado»", [dict(civil, nuevo=True)])])
+assert "1 novedad en tus búsquedas" in resumen_tg and "1 cierra pronto" in resumen_tg, resumen_tg
+assert resumen_tg.index("Adquisicion de cemento") < resumen_tg.index("Servicio de vigilancia")   # lo que cierra antes, primero
+assert 'href="https://x/90"' in resumen_tg and "Echarati" in resumen_tg and "1 oferta de empleo nueva" in resumen_tg and "S/ 4,500" in resumen_tg
+assert "vence en 2 días (27/10/2026)" in resumen_tg and resumen_tg.endswith("Informe completo en tu correo.") and len(resumen_tg) < informe.LIMITE_TELEGRAM
+assert "Hoy no hay novedades" in informe.texto_telegram(hoy_tg, {}, None, [], [], [], None)
+largo = [dict(nuevo_tg, id=f"p-{n}", titulo="X" * 79) for n in range(300)]
+assert len(informe.texto_telegram(hoy_tg, {}, [], [("x", largo)], [], [], None)) <= informe.LIMITE_TELEGRAM
+tg_enviados = []
+requests_post = bot.requests.post
+
+
+def post_falso(url, json=None, timeout=0):
+    tg_enviados.append((url, json))
+    return type("R", (), {"raise_for_status": lambda self: None})()
+
+
+bot.requests.post = post_falso
+try:
+    os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+    assert bot.enviar_telegram("123", "hola") is False and not tg_enviados          # sin token: no hace nada
+    os.environ["TELEGRAM_BOT_TOKEN"] = "TOK"
+    assert bot.enviar_telegram("123", "hola") and tg_enviados[0][0] == "https://api.telegram.org/botTOK/sendMessage"
+    assert tg_enviados[0][1]["chat_id"] == "123" and tg_enviados[0][1]["parse_mode"] == "HTML"
+    assert bot.enviar_telegram("", "hola") is False                                  # sin chat: no envía
+
+    def post_caido(url, json=None, timeout=0):
+        raise bot.requests.ConnectionError(f"fallo en {url}")
+    bot.requests.post = post_caido
+    assert bot.enviar_telegram("123", "hola") is False                               # una caída no propaga (ni filtra el token al log)
+finally:
+    bot.requests.post = requests_post
+    os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+con_vence = con_ini("[a]\ncorreos = a@x.com\npalabras_clave = cemento\ntelegram = 555\nvence = 2026-11-08\n")()[0]
+assert con_vence["telegram"] == "555" and con_vence["vence"] == date(2026, 11, 8)
+debe_fallar("[a]\ncorreos = a@x.com\npalabras_clave = cemento\nvence = pronto\n", "vence")
 
 # Panel de suscriptores (admin.py): crea, edita, pausa, renombra, elimina y restaura sobre un perfiles.ini temporal.
 import json

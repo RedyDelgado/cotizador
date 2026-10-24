@@ -52,6 +52,26 @@
         </section>
 
         <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="mb-1 font-semibold text-marca-950">Telegram</h2>
+            @if ($editing)
+                <p class="mb-3 text-sm text-slate-500">
+                    @if ($subscriber->telegram_chat_id) <b class="text-emerald-700">Vinculado.</b> Recibe aquí el resumen diario.
+                    @else Envíale este enlace; al abrirlo y pulsar «Iniciar» queda vinculado solo.
+                    @endif
+                </p>
+                @if ($telegramLink)
+                    <input readonly value="{{ $telegramLink }}" onclick="this.select()" class="{{ $input }} font-mono text-xs">
+                @else
+                    <p class="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">Falta configurar <code>TELEGRAM_BOT_USERNAME</code> en el .env. Código de vinculación: <b>{{ $subscriber->telegram_link_code }}</b></p>
+                @endif
+                <label for="telegram_chat_id" class="mb-1 mt-3 block text-sm font-medium">Chat de Telegram (se llena solo; vacía para desvincular)</label>
+                <input id="telegram_chat_id" name="telegram_chat_id" value="{{ old('telegram_chat_id', $subscriber->telegram_chat_id) }}" inputmode="numeric" class="{{ $input }} max-w-xs font-mono">
+            @else
+                <p class="text-sm text-slate-500">Al guardar, aquí aparecerá el enlace para que el suscriptor vincule su Telegram.</p>
+            @endif
+        </section>
+
+        <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 class="mb-1 font-semibold text-marca-950">Compras públicas (SEACE)</h2>
             <p class="mb-4 text-sm text-slate-500">Las palabras clave se buscan <b>solo en las regiones</b> elegidas; sin regiones, en todo el país.</p>
 

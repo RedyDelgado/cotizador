@@ -39,7 +39,7 @@ class SubscriberWebTest extends TestCase
         $this->post('/subscribers', [
             'name' => 'Grupo Indescar', 'emails' => ['g@example.com'], 'keywords' => ['cemento', 'fierro'],
             'regions' => ['CUSCO', 'APURIMAC/ABANCAY'], 'full_report' => '1', 'job_min_salary' => '',
-        ])->assertRedirect('/subscribers')->assertSessionHas('status');
+        ])->assertRedirectContains('/payments')->assertSessionHas('status');
 
         $s = Subscriber::firstOrFail();
         $this->assertSame(['cemento', 'fierro'], $s->keywords);

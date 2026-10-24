@@ -27,6 +27,15 @@ class SubscriberResource extends JsonResource
             ],
             'full_report' => $this->full_report,
             'paused' => $this->paused,
+            'billing' => [
+                'status' => $this->billingStatus(),
+                'paid_until' => $this->paid_until?->toDateString(),
+                'days_left' => $this->daysLeft(),
+            ],
+            'telegram' => [
+                'linked' => (bool) $this->telegram_chat_id,
+                'link_code' => $this->telegram_link_code,
+            ],
             'last_sent_at' => $this->last_sent_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),

@@ -871,6 +871,61 @@ def texto_informe(ahora, palabras, convs, grupos, fuentes, frase, seguidas=(), z
     return "\n".join(lineas)
 
 
+LIMITE_TELEGRAM = 3900   # Telegram admite 4096 caracteres por mensaje
+
+
+def texto_telegram(ahora, perfil, convs, grupos, seguidas=(), zonas=(), empleos=None):
+    """Resumen corto para Telegram (HTML): cuántas novedades hay y las más importantes con su enlace. El informe
+    completo sigue yendo por correo. Lo que más urge (cierra pronto) y lo nuevo van primero."""
+    # Lo que el suscriptor pidió (palabras clave y entidades) va en la lista; lo de sus regiones solo se cuenta.
+    procesos = {x["id"]: x for _, items in list(grupos) + list(seguidas) for x in items}
+    nuevos = [x for x in procesos.values() if x["nuevo"]]
+    en_regiones = [x for _, items in zonas for x in items if x["nuevo"] and x["id"] not in procesos]
+    pronto = [x for x in procesos.values() if x["cierre"] and x["abierta"] and dias_hasta(x["cierre"], ahora) <= DIAS_ALERTA]
+    destacados = sorted({x["id"]: x for x in pronto + nuevos}.values(), key=lambda x: x["cierre"] or ahora)
+    uniq_nuevas = [c for c in convs or [] if c["nueva"]]
+    ofertas = {o["id"]: o for _, items in empleos or [] for o in items}
+    ofertas_nuevas = [o for o in ofertas.values() if o["nuevo"]]
+
+    resumen = [plural(len(nuevos), "novedad en tus búsquedas", "novedades en tus búsquedas")]
+    if pronto:
+        resumen.append(f"{len(pronto)} cierra{'' if len(pronto) == 1 else 'n'} pronto")
+    if convs is not None and uniq_nuevas:
+        resumen.append(plural(len(uniq_nuevas), "cotización UNIQ nueva", "cotizaciones UNIQ nuevas"))
+    if en_regiones:
+        resumen.append(plural(len(en_regiones), "nuevo en tus regiones", "nuevos en tus regiones"))
+    if empleos is not None:
+        resumen.append(plural(len(ofertas_nuevas), "oferta de empleo nueva", "ofertas de empleo nuevas"))
+    lineas = [f"<b>NEOESTADO · {ahora:%d/%m/%Y}</b>", " · ".join(resumen)]
+
+    def enlace(url, titulo):
+        return f'<a href="{h(url)}">{h(recortar(oracion(titulo), 80))}</a>'
+
+    if destacados:
+        lineas.append("\n<b>Compras públicas</b>")
+        for x in destacados[:8]:
+            cierre = f" · cierra {dia_mes(x['cierre'])}" if x["cierre"] else ""
+            lineas.append(f"• {enlace(x['url'], x['titulo'])}\n  {h(nombre_propio(x['entidad']))}{cierre}")
+        if len(destacados) > 8:
+            lineas.append(f"… y {len(destacados) - 8} más en tu correo.")
+    for c in uniq_nuevas[:4]:
+        lineas.append(f"• UNIQ: {enlace(c['tdr_url'] or uniq.URL_PAGINA, c['titulo'])} · vence {dia_mes(c['limite'])}")
+    if ofertas_nuevas:
+        lineas.append("\n<b>Empleos</b>")
+        for o in ofertas_nuevas[:5]:
+            lineas.append(f"• {enlace(o['url'], o['titulo'])}\n  {h(nombre_propio(o['entidad']))} · {h(o['sueldo'] or 'sueldo no indicado')}")
+        if len(ofertas_nuevas) > 5:
+            lineas.append(f"… y {len(ofertas_nuevas) - 5} más en tu correo.")
+    if not (destacados or uniq_nuevas or ofertas_nuevas or en_regiones):
+        lineas.append("Hoy no hay novedades. El detalle de lo abierto está en tu correo.")
+    vence = perfil.get("vence")
+    if vence and 0 <= (vence - ahora.date()).days <= 3:
+        dias = (vence - ahora.date()).days
+        lineas.append(f"\n<b>Aviso:</b> tu servicio vence {'hoy' if dias == 0 else f'en {dias} días'} ({vence:%d/%m/%Y}). Renueva para seguir recibiéndolo.")
+    texto = "\n".join(lineas) + "\n\nInforme completo en tu correo."
+    return texto if len(texto) <= LIMITE_TELEGRAM else texto[:LIMITE_TELEGRAM].rsplit("\n", 1)[0] + "\n…"
+
+
 def construir_alerta(detalle, ahora):
     """Correo de falla: un informe no se pudo generar o enviar (fuentes caídas, configuración errónea...)."""
     asunto = f"Monitor de contrataciones: no se pudo generar el informe – {ahora:%d/%m/%Y %H:%M}"

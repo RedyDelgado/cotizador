@@ -12,10 +12,10 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 /** Lo que usa el bot de Python (token con la habilidad "bot"). */
 class BotController extends Controller
 {
-    /** Suscriptores activos, con las mismas claves de perfiles.ini. Los pausados no salen: el bot no les envía nada. */
+    /** Suscriptores con servicio vigente (no pausados y con el pago al día), con las claves de perfiles.ini. Al vencer dejan de salir. */
     public function profiles(): AnonymousResourceCollection
     {
-        return BotProfileResource::collection(Subscriber::active()->orderBy('name')->get());
+        return BotProfileResource::collection(Subscriber::deliverable()->orderBy('name')->get());
     }
 
     /** El bot avisa que ya envió el informe de ese suscriptor (se ve en el panel como "último envío"). */

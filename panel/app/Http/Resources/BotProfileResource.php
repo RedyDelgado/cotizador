@@ -31,6 +31,8 @@ class BotProfileResource extends JsonResource
             'empleo_regiones' => $join($this->job_regions),
             'empleo_sueldo_min' => $this->job_min_salary ? (string) $this->job_min_salary : '',
             'completo' => $this->full_report ? 'si' : 'no',
+            'telegram' => $this->telegram_chat_id,
+            'vence' => $this->paid_until?->toDateString(),
         ], fn ($v) => $v !== null && $v !== '');
     }
 }
