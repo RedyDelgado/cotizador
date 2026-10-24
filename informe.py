@@ -615,7 +615,7 @@ def fila_empleo(i, o, ahora):
                 urgente, lugar=o["lugar"])
 
 
-def html_empleos(grupos, ahora, completo=True):
+def html_empleos(grupos, ahora, completo=True, enlaces=None):
     salida = ""
     for nombre, items in grupos:
         mostradas = (items if completo else [o for o in items if o["nuevo"]])[:MAX_OFERTAS]
@@ -625,9 +625,11 @@ def html_empleos(grupos, ahora, completo=True):
                                f"no caben aquí: se ven en los portales.", url=empleos.PORTAL_MTPE, enlace="Empleos Perú")
         if not items:
             filas = fila_nota("Sin ofertas que coincidan hoy.", primera=True)
-        salida += subtitulo(nombre, plural(len(items), "oferta", "ofertas"))
+        salida += subtitulo(nombre, plural(len(items), "oferta", "ofertas"), (enlaces or {}).get(nombre), "Buscar en Empleos Perú")
         salida += tabla([("Oferta", "left"), ("Sueldo", "right")] if items else [], filas)
-    return salida
+    return (salida + f'<p style="margin:4px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">Talento Perú (SERVIR) no permite '
+            f'enlazar una búsqueda: <a href="{h(empleos.SERVIR)}" style="color:{C["enlace"]};text-decoration:none;font-weight:600">'
+            f'abre su buscador</a> y elige el departamento.</p>')
 
 
 def html_uniq(convs, ahora, completo=True):
@@ -670,7 +672,7 @@ def html_fuentes(fuentes):
 # ------------------------------------------------------------------ informe
 
 def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zonas=(), completo=True, con_uniq=True,
-                      empleos=None, nota_empleo=""):
+                      empleos=None, nota_empleo="", enlaces_empleo=None):
     """convs: cotizaciones UNIQ (None si la fuente falló). grupos: [(frase, [procesos])].
     fuentes: [(nombre, ok, detalle, cobertura)]. seguidas: [(entidad, [procesos])].
     zonas: [(zona, [procesos])] de REGIONES.
@@ -790,7 +792,7 @@ def construir_informe(ahora, palabras, convs, grupos, fuentes, seguidas=(), zona
 
     if empleos is not None:
         cuerpo += seccion(next(numero), "s_empleos", "Ofertas de empleo", nota_empleo)
-        cuerpo += html_empleos(empleos, ahora, completo)
+        cuerpo += html_empleos(empleos, ahora, completo, enlaces_empleo or {})
 
     cuerpo += seccion(next(numero), "s_fuentes", "Fuentes")
     cuerpo += html_fuentes(fuentes)

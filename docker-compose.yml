@@ -1,0 +1,78 @@
+# Prueba local de NEOESTADO. Nada sale a internet salvo las consultas a los portales públicos: los correos
+# los atrapa Mailpit (no se envía nada real) y los paneles solo se publican en 127.0.0.1 de tu equipo.
+#
+#   docker compose up -d --build               # panel Laravel + Mailpit
+#   docker compose run --rm bot                # el bot lee los suscriptores del panel y genera los informes (--dry-run)
+#   docker compose run --rm bot python bot.py  # los envía... a Mailpit
+#
+# Panel de suscriptores (Laravel): http://127.0.0.1:8000   usuario admin@neoestado.test / cambiar-esto-local
+# Correos recibidos (Mailpit):     http://127.0.0.1:8025
+# El estado, los logs y la base quedan en ./docker-data (se borra con: docker compose down -v && rm -r docker-data).
+# El panel antiguo en Python (perfiles.ini) sigue disponible:  docker compose --profile python up -d panel-python
+
+x-bot: &bot
+  build: .
+  image: neoestado-local
+  environment: &entorno
+    PERFILES_INI: /config/perfiles.ini
+    PANEL_CLAVE: ${PANEL_CLAVE:-local}
+    # Los suscriptores salen del panel Laravel (si no responde, el bot usa perfiles.ini)
+    PANEL_URL: http://panel:8000
+    PANEL_TOKEN: ${PANEL_BOT_TOKEN:-token-local-del-bot}
+    # Mailpit en vez de Gmail
+    SMTP_HOST: mailpit
+    SMTP_PORT: "1025"
+    SMTP_SEGURO: "no"
+    SMTP_USER: neoestado@local.test
+    SMTP_PASS: sin-uso
+    MAIL_FROM_NAME: NEOESTADO (local)
+  volumes:
+    - ./docker-data/data:/app/data
+    - ./docker-data/logs:/app/logs
+    - ./docker-data/config:/config
+  depends_on:
+    - mailpit
+    - panel
+
+services:
+  # Panel de administración (Laravel + SQLite): aquí registras qué quiere cada suscriptor.
+  panel:
+    build: ./panel
+    image: neoestado-panel
+    environment:
+      APP_NAME: NEOESTADO
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: http://127.0.0.1:8000
+      APP_LOCALE: es
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@neoestado.test}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-cambiar-esto-local}
+      PANEL_BOT_TOKEN: ${PANEL_BOT_TOKEN:-token-local-del-bot}
+      SEED_DEMO: ${SEED_DEMO:-1}
+    volumes:
+      - ./docker-data/panel:/data
+    ports:
+      - "127.0.0.1:8000:8000"   # solo tu equipo; nunca la red
+    restart: unless-stopped
+
+  # Informes a demanda; no arranca con "up": docker compose run --rm bot [comando]
+  bot:
+    <<: *bot
+    profiles: ["manual"]
+
+  # Panel anterior en Python, sobre perfiles.ini
+  panel-python:
+    <<: *bot
+    command: ["python", "admin.py", "--escuchar", "0.0.0.0", "--minutos", "0"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    profiles: ["python"]
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "127.0.0.1:8025:8025"   # bandeja web
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    restart: unless-stopped

@@ -327,9 +327,14 @@ def buscar_empleos(s, perfil, estado, fuentes):
         fuentes.append(("Talento Perú (SERVIR)", False, error_corto(e), cobertura_servir))
         fallos.append("SERVIR")
     grupos = empleos.agrupar(ofertas, palabras, regiones, set(estado.get("empleos", [])), perfil["empleo_sueldo"], provincia_de)
+    una_region = regiones[0] if len(regiones) == 1 else ""
+    enlaces = {}  # rótulo del grupo -> su búsqueda ya hecha en Empleos Perú
+    for n, _ in grupos:
+        rotulo = informe.mostrar(n) if palabras else informe.nombre_lugar(n)
+        enlaces[rotulo] = empleos.enlace_busqueda(n if palabras else "", una_region if palabras else n)
     grupos = [(informe.mostrar(n) if palabras else informe.nombre_lugar(n), items) for n, items in grupos]
     log.info("Empleos: %s", {n: len(i) for n, i in grupos})
-    return grupos, {x["id"] for _, items in grupos for x in items}, bool(fallos)
+    return grupos, enlaces, {x["id"] for _, items in grupos for x in items}, bool(fallos)
 
 
 # --------------------------------------------------------------------- envío
@@ -358,10 +363,15 @@ def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjun
     if adjunto_html:  # el informe entero como archivo: Gmail recorta el cuerpo del correo, no los adjuntos
         msg.add_attachment(adjunto_html.encode("utf-8"), maintype="text", subtype="html", filename=nombre_adjunto)
 
-    with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
-        smtp.starttls()
+    # Gmail por defecto. En pruebas locales (docker-compose) SMTP_HOST/SMTP_PORT apuntan a Mailpit, que
+    # atrapa los correos sin enviarlos, y SMTP_SEGURO=no salta el cifrado y el inicio de sesión.
+    seguro = os.environ.get("SMTP_SEGURO", "si").lower() not in ("no", "0", "false")
+    with smtplib.SMTP(os.environ.get("SMTP_HOST", "smtp.gmail.com"), int(os.environ.get("SMTP_PORT", 587)), timeout=30) as smtp:
+        if seguro:
+            smtp.starttls()
         # Google la muestra con espacios y, al copiarla, a veces vienen espacios no separables: fuera todos.
-        smtp.login(usuario, "".join(os.environ["SMTP_PASS"].split()))
+        if seguro:
+            smtp.login(usuario, "".join(os.environ["SMTP_PASS"].split()))
         smtp.send_message(msg)
     log.info("Correo enviado a %s: %s", ", ".join(destinos), asunto)
 
@@ -372,7 +382,7 @@ def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjun
 # ese archivo hay un solo perfil con lo que diga el .env (MAIL_TO, PALABRAS_CLAVE, ENTIDADES, REGIONES).
 
 CLAVES_PERFIL = {"correos", "palabras_clave", "entidades", "regiones", "uniq", "completo", "pausado", "nota",
-                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min"}
+                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min", "clave"}
 
 
 def lista(texto):
@@ -392,10 +402,55 @@ def separar_uniq(entidades):
     return list(dict.fromkeys(uniq.NOMBRE if seace.normal(e) in uniq.ALIAS else e for e in entidades)), sigue
 
 
+def ruta_perfiles():
+    """perfiles.ini junto al bot, o donde diga PERFILES_INI (en Docker vive en un volumen)."""
+    return Path(os.environ["PERFILES_INI"]) if os.environ.get("PERFILES_INI") else DIR / "perfiles.ini"
+
+
+def _cabeceras_panel():
+    return {"Authorization": f"Bearer {os.environ['PANEL_TOKEN']}", "Accept": "application/json"}
+
+
+def perfiles_del_panel():
+    """Suscriptores activos del panel de administración (Laravel), si PANEL_URL y PANEL_TOKEN están definidos.
+    None si no está configurado o no responde: entonces se usa perfiles.ini. Los pausados no vienen."""
+    if not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
+        return None
+    try:
+        r = requests.get(os.environ["PANEL_URL"].rstrip("/") + "/api/bot/profiles", headers=_cabeceras_panel(), timeout=30)
+        r.raise_for_status()
+        filas = r.json()["data"]
+    except Exception as e:
+        log.warning("El panel de suscriptores no respondió (%s); se usa perfiles.ini", error_corto(e))
+        return None
+    perfiles = []
+    for fila in filas:
+        nombre = fila.pop("nombre")
+        try:
+            perfiles.append(perfil_de_seccion(nombre, fila))
+        except ValueError as e:  # un suscriptor mal armado no debe dejar sin informe a los demás
+            log.error("Suscriptor del panel [%s] omitido: %s", nombre, e)
+    return perfiles
+
+
+def avisar_envio_al_panel(perfil):
+    """Anota en el panel que ya se envió el informe (su "último envío"). Si falla no importa: el correo ya salió."""
+    if perfil.get("legacy") or not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
+        return
+    try:
+        requests.post(os.environ["PANEL_URL"].rstrip("/") + "/api/bot/sent", json={"nombre": perfil["nombre"]},
+                      headers=_cabeceras_panel(), timeout=15)
+    except Exception as e:
+        log.warning("No se pudo avisar el envío al panel: %s", error_corto(e))
+
+
 def cargar_perfiles():
     """[{nombre, correos, palabras, entidades, regiones, uniq, completo, legacy}]. ValueError si el
     archivo tiene un error (con el mensaje para corregirlo)."""
-    ruta = DIR / "perfiles.ini"
+    del_panel = perfiles_del_panel()
+    if del_panel is not None:
+        return del_panel
+    ruta = ruta_perfiles()
     if not ruta.exists():
         return [{"nombre": "principal", "legacy": True, "correos": lista(os.environ.get("MAIL_TO")),
                  "palabras": lista(os.environ.get("PALABRAS_CLAVE")),
@@ -446,7 +501,8 @@ def perfil_de_seccion(nombre, sec):
     perfil = {"nombre": nombre, "legacy": False, "correos": correos, "palabras": lista(sec.get("palabras_clave")),
               "entidades": entidades, "regiones": lista(sec.get("regiones")), "nota": (sec.get("nota") or "").strip(),
               "uniq": sigue_uniq or es_si(sec.get("uniq"), por_defecto=False), "completo": es_si(sec.get("completo")),
-              "pausado": es_si(sec.get("pausado"), por_defecto=False), "empleo_palabras": lista(sec.get("empleo_palabras")),
+              "pausado": es_si(sec.get("pausado"), por_defecto=False), "clave": (sec.get("clave") or "").strip(),
+              "empleo_palabras": lista(sec.get("empleo_palabras")),
               "empleo_regiones": lista(sec.get("empleo_regiones")), "empleo_sueldo": sueldo_minimo(nombre, sec.get("empleo_sueldo_min"))}
     # Las ofertas de empleo se reciben si el bloque pide algo de ellas (palabras, regiones o un sueldo mínimo).
     perfil["empleos"] = bool(perfil["empleo_palabras"] or perfil["empleo_regiones"] or perfil["empleo_sueldo"])
@@ -460,7 +516,8 @@ def estado_de(estado, perfil):
     siempre; los de perfiles.ini guardan lo suyo aparte, así lo NUEVO es propio de cada uno."""
     if perfil["legacy"]:
         return estado
-    return estado.setdefault("perfiles", {}).setdefault(perfil["nombre"], {})
+    # "clave": identificador estable del panel (sigue igual si se renombra al suscriptor); sin él, el nombre
+    return estado.setdefault("perfiles", {}).setdefault(perfil.get("clave") or perfil["nombre"], {})
 
 
 def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
@@ -494,17 +551,21 @@ def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
     seace_ids |= {x["id"] for _, items in seguidas for x in items} | {x["id"] for _, items in zonas for x in items}
     # Ubicación (región › provincia › distrito) de todo lo que sale en el informe; se guarda en el estado.
     todos = [x for _, items in grupos + seguidas + zonas for x in items]
-    seace.completar_lugares(s, todos, estado.setdefault("lugares", {}), ahora, log)
+    sin_leer = seace.completar_lugares(s, todos, estado.setdefault("lugares", {}), ahora, log)
+    if sin_leer:
+        fuentes.append(("SEACE · Ubicación y requerimiento de cada proceso", True,
+                        f"{sin_leer} datos sin leer hoy (el portal limita el ritmo de consultas); se completan en la próxima ejecución",
+                        "Detalle de las contrataciones menores"))
     if perfil["empleos"]:
-        grupos_empleo, empleo_ids, empleo_fallo = buscar_empleos(s, perfil, propio, fuentes)
+        grupos_empleo, enlaces_empleo, empleo_ids, empleo_fallo = buscar_empleos(s, perfil, propio, fuentes)
     else:
-        grupos_empleo, empleo_ids, empleo_fallo = None, set(), False
+        grupos_empleo, enlaces_empleo, empleo_ids, empleo_fallo = None, {}, set(), False
 
     if fuentes and all(not ok for _, ok, _, _ in fuentes):
         raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
     asunto, texto, cuerpo = informe.construir_informe(ahora, perfil["palabras"], convs, grupos, fuentes, seguidas, zonas,
                                                       perfil["completo"], perfil["uniq"],
-                                                      grupos_empleo, informe.nota_empleos(perfil))
+                                                      grupos_empleo, informe.nota_empleos(perfil), enlaces_empleo)
     ids_uniq = sorted(c["id"] for c in convs) if convs is not None else None
     return (asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo or entidades_fallo or zonas_fallo,
             empleo_ids, empleo_fallo)
@@ -588,6 +649,7 @@ def main():
                         propio["empleos"] = sorted(empleo_ids | (set(propio.get("empleos", [])) if empleo_fallo else set()))
                     propio["enviado"] = ahora.isoformat(timespec="minutes")  # lo muestra el panel (admin.py)
                     guardar_estado(estado, ahora)
+                    avisar_envio_al_panel(perfil)
             except Exception:
                 log.exception("No se pudo generar o enviar el informe de [%s]", perfil["nombre"])
                 fallos.append(f"Perfil [{perfil['nombre']}]:\n{traceback.format_exc()}")

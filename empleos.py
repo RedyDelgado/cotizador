@@ -12,6 +12,7 @@ indica), sueldo (texto), publicado, cierre (None si no se conoce), vacantes, det
 import hashlib
 import re
 from datetime import datetime
+from urllib.parse import urlencode
 
 import seace
 import uniq
@@ -198,6 +199,13 @@ def buscar_servir(s, codigo_departamento="0", perfil="", maximo=MAX_PAGINAS_SERV
         ofertas += ofertas_de_pagina(html)
         n = _paginas(html)[0]
     return ofertas
+
+
+def enlace_busqueda(palabra="", region=""):
+    """Enlace al buscador de Empleos Perú con la búsqueda ya hecha (acepta ?what=puesto&where=lugar).
+    SERVIR no tiene algo así: su página es JSF y no lee la dirección."""
+    consulta = {k: v for k, v in (("what", palabra.strip('"')), ("where", region.partition("/")[0].title())) if v}
+    return PORTAL_MTPE + ("?" + urlencode(consulta) if consulta else "")
 
 
 # ------------------------------------------------------------------ selección

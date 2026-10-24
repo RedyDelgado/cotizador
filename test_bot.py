@@ -185,6 +185,7 @@ class Resp:
 
 
 consultas = []
+seace.PAUSA_PROD6 = 0  # en la prueba no hace falta esperar entre consultas
 
 
 class SesionFalsa:
@@ -365,6 +366,10 @@ asunto, texto, html = informe.construir_informe(ahora, [], [], [], [("Empleos Pe
 assert "1 oferta de empleo (1 nuevas)" in asunto and "procesos nuevos" not in asunto, asunto
 assert "Ofertas de empleo" in html and "S/ 4,500" in html and "Ingeniero civil IV" in html and "Echarati" in html
 assert "OFERTAS DE EMPLEO" in texto and "https://app.servir.gob.pe" in texto and "Sin ofertas que coincidan" in html
+assert empleos.enlace_busqueda('"asistente administrativo"', "CUSCO/LA CONVENCION") == empleos.PORTAL_MTPE + "?what=asistente+administrativo&where=Cusco"
+assert empleos.enlace_busqueda("", "APURIMAC") == empleos.PORTAL_MTPE + "?where=Apurimac" and empleos.enlace_busqueda() == empleos.PORTAL_MTPE
+_, _, html_enlace = informe.construir_informe(ahora, [], [], [], [("x", True, "", "")], [], [], True, False, grupos_empleo, "", {grupos_empleo[0][0]: empleos.enlace_busqueda("ingeniero", "CUSCO")})
+assert "what=ingeniero&amp;where=Cusco" in html_enlace and "Buscar en Empleos Perú" in html_enlace and "abre su buscador" in html_enlace
 assert "Ofertas de empleo" not in informe.construir_informe(ahora, [], [], [], [("x", True, "", "")], [], [], True, False)[2]
 
 # Maestras del SEACE: un JSON de error (HTTP 403 disfrazado) se avisa claro y se usa la última lista buena.
@@ -387,11 +392,17 @@ class SesionFalsa:
 guardadas = {}
 assert seace.maestra(SesionFalsa(RespuestaFalsa(200, [{"nom": "CUSCO"}])), "u", guardadas, "dep") == [{"nom": "CUSCO"}]
 assert seace.maestra(SesionFalsa(RespuestaFalsa(200, {"code": "403"})), "u", guardadas, "dep") == [{"nom": "CUSCO"}]
+bloqueada = SesionFalsa(RespuestaFalsa(200, {"code": "403", "message": "Forbidden"}))
+deps = seace.maestra(bloqueada, "u", {}, "dep")                  # bloqueado y sin guardado: la copia que viene con el bot
+cusco = next(d for d in deps if d["nom"] == "CUSCO")
+assert len(deps) == 25 and cusco["ubigeoInei"] == "08" and any(x["nom"] == "LA CONVENCION" for x in seace.maestra(bloqueada, "u", {}, f"prov{cusco['id']}"))
+copia, seace.MAESTRAS_EMPAQUETADAS = seace.MAESTRAS_EMPAQUETADAS, Path("no-existe.json")
 try:
-    seace.maestra(SesionFalsa(RespuestaFalsa(200, {"code": "403", "message": "Forbidden"})), "u", {}, "dep")
+    seace.maestra(bloqueada, "u", {}, "dep")
     raise AssertionError("debía fallar")
 except RuntimeError as e:
     assert "Forbidden" in str(e)
+seace.MAESTRAS_EMPAQUETADAS = copia
 
 # Requerimiento de una contratación menor: enlace directo al archivo, guardado en el caché (una consulta por proceso).
 class SesionMenor:
@@ -413,6 +424,54 @@ assert menor["lugar"] == "CUSCO/LA CONVENCION/SANTA ANA" and cache_menor["m-1041
 seace.completar_lugares(sesion_menor, [dict(menor)], cache_menor, ahora)
 assert len(sesion_menor.llamadas) == 1                          # ya guardado: no vuelve a consultar
 assert "Descargar requerimiento" in informe.enlace_bases(menor) and "Descargar bases" not in informe.enlace_bases(menor)
+
+# Freno ante el 403 del portal: tras el primero no se insiste (el bloqueo dura ~10 min) y se cuenta lo que faltó.
+class Sesion403:
+    llamadas = 0
+
+    def get(self, url, params=None, **kw):
+        Sesion403.llamadas += 1
+
+        class R403:
+            status_code = 403
+
+            def raise_for_status(self):
+                raise RuntimeError("403 Forbidden")
+        return R403()
+
+
+frenadas = [{"id": f"m-{n}", "fuente": "SEACE"} for n in range(1, 6)]
+faltan = seace.completar_lugares(Sesion403(), frenadas, {}, ahora)
+assert Sesion403.llamadas <= 4 and faltan >= 5 and all(x["lugar"] == "" and "bases" not in x for x in frenadas), (Sesion403.llamadas, faltan)
+
+# Suscriptores desde el panel Laravel: mismas claves de perfiles.ini; si el panel no responde, se usa perfiles.ini.
+class RespuestaPanel:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": [{"nombre": "Maria", "correos": "m@example.com", "palabras_clave": "cemento", "entidades": "UNIQ,UGEL LA CONVENCION",
+                          "empleo_palabras": "abogado", "empleo_sueldo_min": "2500", "completo": "no"},
+                         {"nombre": "Mal", "correos": "sin-arroba", "palabras_clave": "x"}]}
+
+
+pedidos, requests_get = [], bot.requests.get
+bot.requests.get = lambda url, headers=None, timeout=0: (pedidos.append((url, headers)), RespuestaPanel())[1]
+os.environ.update(PANEL_URL="http://panel:8000/", PANEL_TOKEN="tok")
+try:
+    del_panel = bot.cargar_perfiles()
+    assert [p["nombre"] for p in del_panel] == ["Maria"]          # el mal armado se omite sin tumbar a los demás
+    assert del_panel[0]["uniq"] and del_panel[0]["entidades"] == [uniq.NOMBRE, "UGEL LA CONVENCION"] and del_panel[0]["empleo_sueldo"] == 2500
+    assert not del_panel[0]["completo"] and pedidos[0][0] == "http://panel:8000/api/bot/profiles" and pedidos[0][1]["Authorization"] == "Bearer tok"
+
+    def panel_caido(url, headers=None, timeout=0):
+        raise bot.requests.ConnectionError("sin conexión")
+    bot.requests.get = panel_caido
+    con_ini("[a]\ncorreos = a@x.com\npalabras_clave = cemento\n")  # el respaldo: perfiles.ini
+    assert [p["nombre"] for p in bot.cargar_perfiles()] == ["a"]
+finally:
+    bot.requests.get = requests_get
+    del os.environ["PANEL_URL"], os.environ["PANEL_TOKEN"]
 
 # Panel de suscriptores (admin.py): crea, edita, pausa, renombra, elimina y restaura sobre un perfiles.ini temporal.
 import json

@@ -8,6 +8,7 @@ perfiles.ini que usa el bot, valida con las mismas reglas y guarda un respaldo a
 import argparse
 import copy
 import json
+import os
 import re
 import secrets
 import shutil
@@ -25,7 +26,7 @@ import informe
 import seace
 import uniq
 
-INI = bot.DIR / "perfiles.ini"
+INI = bot.ruta_perfiles()
 RESPALDOS = bot.DIR / "data" / "respaldos"
 HTML = bot.DIR / "admin.html"
 MAX_RESPALDOS = 40
@@ -395,14 +396,17 @@ class Panel(BaseHTTPRequestHandler):
 def main():
     p = argparse.ArgumentParser(description="Panel local de suscriptores (solo 127.0.0.1).")
     p.add_argument("--puerto", type=int, default=8787)
+    p.add_argument("--escuchar", default="127.0.0.1", help="solo para Docker (0.0.0.0 DENTRO del contenedor; el puerto se "
+                   "publica únicamente en 127.0.0.1 del equipo, ver docker-compose.yml)")
     p.add_argument("--minutos", type=int, default=60, help="se apaga tras estos minutos sin uso (0 = nunca)")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     bot.cargar_env()
     bot.configurar_log()
 
-    Panel.clave, Panel.puerto = secrets.token_urlsafe(16), args.puerto
-    servidor = ThreadingHTTPServer(("127.0.0.1", args.puerto), Panel)  # nunca 0.0.0.0
+    # PANEL_CLAVE fija la clave (cómodo en el Docker local); sin ella, una distinta en cada arranque.
+    Panel.clave, Panel.puerto = os.environ.get("PANEL_CLAVE") or secrets.token_urlsafe(16), args.puerto
+    servidor = ThreadingHTTPServer((args.escuchar, args.puerto), Panel)  # fuera de Docker: siempre 127.0.0.1
     threading.Thread(target=cargar_entidades, daemon=True).start()
     if args.minutos:
         def vigilar():

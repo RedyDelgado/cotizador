@@ -1,0 +1,10 @@
+.git
+.env
+perfiles.ini
+data
+logs
+docker-data
+venv
+__pycache__
+preview*.html
+bases.py

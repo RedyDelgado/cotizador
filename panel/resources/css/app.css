@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+
+@source '../views/**/*.blade.php';
+
+@theme {
+    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, 'Segoe UI', system-ui, sans-serif;
+    /* violeta de la marca NEOESTADO */
+    --color-marca-50: #F5F3FF;
+    --color-marca-100: #EDE9FE;
+    --color-marca-200: #DDD6FE;
+    --color-marca-500: #8B5CF6;
+    --color-marca-600: #7C3AED;
+    --color-marca-700: #6D28D9;
+    --color-marca-800: #5B21B6;
+    --color-marca-950: #2E1065;
+}

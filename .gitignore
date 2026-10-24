@@ -5,3 +5,5 @@ venv/
 preview*.html
 __pycache__/
 perfiles.ini
+
+docker-data/

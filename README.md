@@ -173,8 +173,59 @@ empleo_sueldo_min = 3000
   (región › provincia › distrito), sueldo, entidad, fecha de cierre (SERVIR) o de publicación, y lo nuevo marcado.
 - Sin regiones, SERVIR se consulta por palabra clave (por país serían 387 páginas); con regiones se recorre
   cada departamento (Cusco, unas 19 páginas). SERVIR no tiene enlace por oferta: el enlace abre su buscador.
+- Cada grupo trae el enlace **"Buscar en Empleos Perú"** con la búsqueda ya hecha (puesto y lugar). SERVIR no lo
+  permite: su enlace abre el buscador y se elige el departamento.
 - Cada portal que no responda queda anotado en **Fuentes** sin tumbar el resto del informe.
 - Todo esto también se maneja desde la pestaña **Empleos** del panel de suscriptores.
+
+## Panel de administración (Laravel)
+
+`panel/` es una aplicación Laravel (SQLite, sin MySQL: no toca otras aplicaciones) donde **registras qué quiere cada
+suscriptor**: correos, regiones, palabras clave, entidades, UNIQ, empleos y sueldo mínimo; con pausa, duplicar y búsqueda.
+
+- **Web** (sesión): `/login`, `/subscribers`. Tu usuario sale de `ADMIN_EMAIL` / `ADMIN_PASSWORD` (`php artisan db:seed`).
+- **API** (tokens Sanctum, `php artisan panel:token NOMBRE --abilities=subscribers|bot`):
+  `GET|POST /api/subscribers`, `GET|PUT|DELETE /api/subscribers/{id}`, `PATCH /api/subscribers/{id}/pause`;
+  para el bot: `GET /api/bot/profiles` (activos, en el formato de `perfiles.ini`) y `POST /api/bot/sent`.
+- **El bot lo lee solo:** con `PANEL_URL` y `PANEL_TOKEN` en el `.env`, `bot.py` toma los suscriptores del panel
+  (los pausados no salen) y avisa lo que envió. Si el panel no responde, usa `perfiles.ini`.
+- **Renombrar es seguro:** cada suscriptor lleva una `clave` fija con la que el bot guarda "lo ya informado".
+- **Sin HTTP en el servidor:** `php artisan panel:export-perfiles /ruta/perfiles.ini` escribe los suscriptores activos
+  como `perfiles.ini` (el bot lo lee igual). Útil en el VPS: no hace falta abrir ningún puerto ni dejar un servicio.
+- Los estilos (Tailwind) se compilan con Vite (`npm run build`; el Dockerfile ya lo hace).
+- Validación en `app/Http/Requests`, respuestas en `app/Http/Resources`; pruebas con `php artisan test`
+  (en Docker: `docker run --rm neoestado-panel sh -c "cp .env.example .env && php artisan test"`).
+
+## Probarlo en local con Docker
+
+Sirve para ver el panel y los correos sin tocar el VPS ni enviar nada real (el VPS no usa Docker: sigue con `install.sh`).
+
+```bash
+docker compose up -d --build          # panel + Mailpit (bandeja de prueba)
+docker compose run --rm bot           # genera los informes sin enviar (--dry-run)
+docker compose run --rm bot python bot.py   # los "envía": caen en Mailpit
+docker compose down                   # apaga todo (los datos quedan en ./docker-data)
+```
+
+- **Panel Laravel:** <http://127.0.0.1:8000> (usuario `admin@neoestado.test`, contraseña `cambiar-esto-local`; solo tu equipo).
+  **Correos recibidos:** <http://127.0.0.1:8025>. El panel anterior en Python: `docker compose --profile python up -d panel-python`.
+- El primer arranque crea dos suscriptores de demostración (correos `example.com`); el bot los toma del panel.
+- Se consultan los portales públicos reales (SEACE, UNIQ, Empleos Perú, SERVIR); la primera corrida tarda 1-2 minutos por el
+  ritmo de consultas. Estado, logs y perfiles quedan en `./docker-data` (no se sube a GitHub).
+- Para usar otra clave del panel: `PANEL_CLAVE=otra docker compose up -d`.
+
+## Límite de consultas del portal de contrataciones menores
+
+El portal de las contrataciones menores (`prod6.seace.gob.pe`) bloquea unos 10 minutos a quien le pide muy
+rápido (responde HTTP 403 `{"message":"Forbidden"}`); medido: 2,5 consultas por segundo bloquean, 1 por
+segundo no. Por eso el bot:
+
+- pide la ubicación y el requerimiento de cada contratación **a 1 por segundo**, con un tope de 200 consultas
+  por ejecución; lo que falte se completa al día siguiente (lo leído queda guardado en `data/estado.json`);
+- si aun así llega un 403, **deja de pedir** hasta la próxima ejecución y lo anota en *Fuentes*;
+- guarda la última lista de departamentos y provincias y trae una copia (`maestras.json`) por si el portal la rechaza.
+
+La primera ejecución tras instalar puede tardar unos minutos más; las siguientes solo piden lo nuevo.
 
 ## Panel de suscriptores
 
@@ -217,6 +268,7 @@ sí los tiene en `data/respaldos/`). Opciones: `--puerto N`, `--minutos N` (0 = 
 | | |
 |---|---|
 | `bot.py` | orquesta: lee las fuentes, arma un informe por perfil y lo envía |
+| `maestras.json` | copia de departamentos y provincias del SEACE, por si el portal rechaza la consulta |
 | `empleos.py` | ofertas de empleo: Empleos Perú (API JSON) y Talento Perú/SERVIR (página JSF) |
 | `admin.py` + `admin.html` | panel local de suscriptores (agregar, editar, pausar, vista previa); ver [Panel de suscriptores](#panel-de-suscriptores) |
 | `uniq.py` | cotizaciones UNIQ y lectura del TDR/EETT |

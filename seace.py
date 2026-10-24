@@ -14,10 +14,14 @@ Cómo se busca una frase como "sistema de seguridad ciudadana":
 - una frase entre comillas exige además que las palabras vayan juntas (ver coincide()).
 """
 import itertools
+import json
 import re
+import threading
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 URL_MENORES = "https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/buscador"
@@ -210,19 +214,42 @@ URL_ARCHIVOS_MENOR = "https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archi
 URL_REQUERIMIENTO = "https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos-publico/descargar-archivo-contrato/{}"
 DIAS_CACHE_LUGAR = 45  # un proceso sigue abierto 1 o 2 semanas; 45 días da margen de sobra
 
+# prod6 (contrataciones menores) limita a quien le pide demasiado rápido: responde 403 {"message":"Forbidden"}
+# y bloquea la IP unos 10 minutos. Medido el 21/10/2026 desde una IP de Perú: 2,5 consultas por segundo
+# bloquean a las pocas decenas; 150 consultas a 1 por segundo pasaron sin problema. Los detalles (ubicación y
+# requerimiento, uno por contratación) se piden a ese ritmo, con un tope por ejecución, y si llega un 403 se
+# dejan de pedir hasta la próxima ejecución: lo que falte se completa mañana (queda guardado lo ya leído).
+PAUSA_PROD6 = 1.0
+MAX_CONSULTAS_PROD6 = 200   # por ejecución (unos 3 minutos y medio)
+_ritmo = {"cerrojo": threading.Lock(), "ultimo": 0.0, "bloqueado": False, "restantes": MAX_CONSULTAS_PROD6}
+
+
+def _pedir_prod6(s, url, **kwargs):
+    if _ritmo["bloqueado"] or _ritmo["restantes"] <= 0:
+        raise RuntimeError("tope de consultas al portal alcanzado (o el portal las limitó, HTTP 403); "
+                           "se completa en la próxima ejecución")
+    _ritmo["restantes"] -= 1
+    with _ritmo["cerrojo"]:
+        espera = _ritmo["ultimo"] + PAUSA_PROD6 - time.monotonic()
+        if espera > 0:
+            time.sleep(espera)
+        _ritmo["ultimo"] = time.monotonic()
+    r = s.get(url, timeout=60, **kwargs)
+    if getattr(r, "status_code", 200) == 403:
+        _ritmo["bloqueado"] = True
+    r.raise_for_status()
+    return r
+
 
 def _lugar_de_menor(s, id_contrato):
-    r = s.get(URL_DETALLE_MENOR, params={"id_contrato": id_contrato}, timeout=60)
-    r.raise_for_status()
+    r = _pedir_prod6(s, URL_DETALLE_MENOR, params={"id_contrato": id_contrato})
     items = (r.json() or {}).get("uitContratoItemProjectionList") or []
     return " | ".join(dict.fromkeys(i["nomDistrito"].strip() for i in items if i.get("nomDistrito")))
 
 
 def _requerimiento_de_menor(s, id_contrato):
     """Id del archivo del requerimiento ("" si la contratación no lo tiene)."""
-    r = s.get(URL_ARCHIVOS_MENOR.format(id_contrato), timeout=60)
-    r.raise_for_status()
-    archivos = r.json()
+    archivos = _pedir_prod6(s, URL_ARCHIVOS_MENOR.format(id_contrato)).json()
     return str(archivos[0]["idContratoArchivo"]) if isinstance(archivos, list) and archivos else ""
 
 
@@ -244,9 +271,10 @@ def completar_lugares(s, procesos, cache, ahora, log=None):
     separados por " | ") y, en las contrataciones menores, con el enlace directo a su requerimiento (x["bases"]).
     cache = {id: {"l": lugar, "r": id del archivo del requerimiento, "v": última vez visto}} se guarda en
     estado.json: cada día solo se consulta lo que no se había visto. Una consulta que falla deja ese dato
-    vacío; no rompe el informe."""
+    vacío; no rompe el informe. Devuelve cuántas consultas no se pudieron hacer."""
     hoy = f"{ahora:%Y-%m-%d}"
-    pendientes = {}
+    _ritmo["bloqueado"], _ritmo["restantes"] = False, MAX_CONSULTAS_PROD6
+    pendientes, sin_leer = {}, 0
     for x in procesos:
         if x["fuente"] != "SEACE":
             continue
@@ -262,18 +290,21 @@ def completar_lugares(s, procesos, cache, ahora, log=None):
         try:
             dato["l"] = previo["l"] if "l" in previo else (_lugar_de_menor if id_.startswith("m-") else _lugar_de_proceso)(s, numero)
         except Exception as e:
+            dato["fallo"] = dato.get("fallo", 0) + 1
             if log:
                 log.warning("No se pudo leer la ubicación de %s: %s", id_, e)
         if id_.startswith("m-") and "r" not in previo:
             try:
                 dato["r"] = _requerimiento_de_menor(s, numero)
             except Exception as e:
+                dato["fallo"] = dato.get("fallo", 0) + 1
                 if log:
                     log.warning("No se pudo leer el requerimiento de %s: %s", id_, e)
         return id_, dato
 
     with ThreadPoolExecutor(max_workers=4) as pool:  # pocas conexiones a la vez: son portales públicos
         for id_, dato in pool.map(buscar, pendientes):
+            sin_leer += dato.pop("fallo", 0)
             if dato.get("l") or "r" in dato:
                 cache.setdefault(id_, {}).update({k: v for k, v in dato.items() if k == "r" or v}, v=hoy)
     for x in procesos:
@@ -285,14 +316,28 @@ def completar_lugares(s, procesos, cache, ahora, log=None):
     limite = f"{ahora - timedelta(days=DIAS_CACHE_LUGAR):%Y-%m-%d}"
     for id_ in [k for k, v in cache.items() if v["v"] < limite]:
         del cache[id_]
+    return sin_leer
 
 
 # -------------------------------------------------------------- regiones
 
+MAESTRAS_EMPAQUETADAS = Path(__file__).resolve().parent / "maestras.json"
+
+
+def _empaquetada(clave):
+    """Departamentos y provincias del SEACE tal como estaban en octubre de 2026 (maestras.json): casi no
+    cambian, y es lo último que se usa cuando el portal rechaza la consulta y no hay respuesta guardada."""
+    try:
+        datos = json.loads(MAESTRAS_EMPAQUETADAS.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return datos["departamentos"] if clave == "dep" else datos["provincias"].get(clave[4:])
+
+
 def maestra(s, url, guardadas, clave):
     """Lista de una maestra del SEACE (departamentos, provincias). El portal a veces responde un JSON de error
     ({"code": "403", ...}) en vez de la lista: se avisa con claridad y, si hay una respuesta buena de antes
-    (guardadas = dict que se guarda en estado.json), se usa esa: departamentos y provincias casi no cambian."""
+    (guardadas = dict que se guarda en estado.json) o, si no, la copia que viene con el bot, se usa esa."""
     try:
         r = s.get(url, timeout=60)
         datos = r.json() if r.status_code == 200 else None
@@ -303,6 +348,8 @@ def maestra(s, url, guardadas, clave):
     except Exception:
         if clave in guardadas:
             return guardadas[clave]
+        if _empaquetada(clave):
+            return _empaquetada(clave)
         raise
 
 
