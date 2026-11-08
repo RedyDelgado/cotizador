@@ -411,13 +411,15 @@ def _cabeceras_panel():
     return {"Authorization": f"Bearer {os.environ['PANEL_TOKEN']}", "Accept": "application/json"}
 
 
-def perfiles_del_panel():
-    """Suscriptores activos del panel de administración (Laravel), si PANEL_URL y PANEL_TOKEN están definidos.
-    None si no está configurado o no responde: entonces se usa perfiles.ini. Los pausados no vienen."""
+def perfiles_del_panel(pendientes=False):
+    """Suscriptores con servicio vigente del panel de administración (Laravel), si PANEL_URL y PANEL_TOKEN están
+    definidos; con pendientes=True, solo a quienes el panel pidió enviar ya (primer pago, reactivación, «Enviar
+    ahora»). None si no está configurado o no responde: entonces se usa perfiles.ini. Los pausados no vienen."""
     if not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
         return None
     try:
-        r = requests.get(os.environ["PANEL_URL"].rstrip("/") + "/api/bot/profiles", headers=_cabeceras_panel(), timeout=30)
+        r = requests.get(os.environ["PANEL_URL"].rstrip("/") + "/api/bot/profiles", headers=_cabeceras_panel(), timeout=30,
+                         params={"pending": 1} if pendientes else None)
         r.raise_for_status()
         filas = r.json()["data"]
     except Exception as e:
@@ -461,12 +463,14 @@ def avisar_envio_al_panel(perfil):
         log.warning("No se pudo avisar el envío al panel: %s", error_corto(e))
 
 
-def cargar_perfiles():
+def cargar_perfiles(pendientes=False):
     """[{nombre, correos, palabras, entidades, regiones, uniq, completo, legacy}]. ValueError si el
-    archivo tiene un error (con el mensaje para corregirlo)."""
-    del_panel = perfiles_del_panel()
+    archivo tiene un error (con el mensaje para corregirlo). pendientes=True: solo los que el panel pidió enviar ya."""
+    del_panel = perfiles_del_panel(pendientes)
     if del_panel is not None:
         return del_panel
+    if pendientes:  # sin el panel no hay a quién «enviar ya»: nunca se cae a perfiles.ini (enviaría a todos)
+        return []
     ruta = ruta_perfiles()
     if not ruta.exists():
         return [{"nombre": "principal", "legacy": True, "correos": lista(os.environ.get("MAIL_TO")),
@@ -608,12 +612,35 @@ def destinatarios_de_alerta(perfiles):
 
 # ---------------------------------------------------------------------- main
 
+_cerrojo = None
+
+
+def tomar_cerrojo():
+    """Una sola ejecución a la vez (la diaria y la de pendientes no deben pisarse el estado). True si lo obtuvo.
+    En Windows no hay fcntl: ahí no se bloquea (solo desarrollo)."""
+    global _cerrojo
+    try:
+        import fcntl
+    except ImportError:
+        return True
+    ESTADO.parent.mkdir(exist_ok=True)
+    _cerrojo = open(ESTADO.parent / "bot.lock", "w")
+    try:
+        fcntl.flock(_cerrojo, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
 def main():
     p = argparse.ArgumentParser(description="Informe diario de oportunidades: UNIQ y SEACE, uno por perfil.")
     p.add_argument("--dry-run", action="store_true", help="imprime los informes en consola; no envía ni actualiza el estado")
     p.add_argument("--html-preview", action="store_true",
                    help="guarda el HTML en preview.html (preview_<perfil>.html si hay varios); no envía")
     p.add_argument("--perfil", help="genera solo el perfil con ese nombre")
+    p.add_argument("--pendientes", action="store_true",
+                   help="envía solo a quienes el panel pidió enviar ya (primer pago, reactivación, «Enviar ahora»); "
+                        "pensado para correr cada pocos minutos: sin pendientes termina enseguida")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")  # tildes en la consola de Windows
     cargar_env()
@@ -630,8 +657,14 @@ def main():
             except Exception:
                 log.exception("Tampoco se pudo enviar el correo de alerta")
 
+    if args.pendientes and not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
+        print("--pendientes necesita PANEL_URL y PANEL_TOKEN (el panel de suscriptores).", file=sys.stderr)
+        return 1
+    if not tomar_cerrojo():
+        log.info("Ya hay otra ejecución en curso; esta se omite")
+        return 0
     try:
-        perfiles = cargar_perfiles()
+        perfiles = cargar_perfiles(pendientes=args.pendientes)
     except ValueError as e:
         log.error("%s", e)
         print(e, file=sys.stderr)
@@ -646,7 +679,8 @@ def main():
     else:
         perfiles = [x for x in perfiles if not x.get("pausado")]
         if not perfiles:
-            log.info("Todos los perfiles están pausados; no hay nada que enviar")
+            if not args.pendientes:  # (cada pocos minutos no hay pendientes: sin ruido en el log)
+                log.info("Todos los perfiles están pausados; no hay nada que enviar")
             return 0
 
     try:

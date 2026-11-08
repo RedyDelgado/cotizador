@@ -8,7 +8,7 @@
 </head>
 <body class="min-h-screen bg-slate-100 text-slate-900">
 <header class="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-    <div class="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
+    <div class="mx-auto flex @hasSection('wide') max-w-[1600px] @else max-w-5xl @endif items-center gap-3 px-4 py-3">
         <img src="{{ asset('logo.png') }}" alt="" class="h-10 w-10 rounded-lg" onerror="this.remove()">
         <div class="leading-tight">
             <div class="font-semibold text-marca-950">Suscriptores</div>
@@ -24,7 +24,7 @@
     </div>
 </header>
 
-<main class="mx-auto max-w-5xl px-4 pb-24 pt-6">
+<main class="mx-auto @hasSection('wide') max-w-[1600px] @else max-w-5xl @endif px-4 pb-24 pt-6">
     @if (session('status'))
         <div role="status" class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('status') }}</div>
     @endif

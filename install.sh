@@ -77,7 +77,10 @@ echo "Zona horaria del servidor: $(timedatectl show -p Timezone --value 2>/dev/n
 read -r MIN HORA < <(date -d "TZ=\"America/Lima\" $HORA_LIMA" '+%M %H')
 echo "$HORA_LIMA en Lima = $HORA:$MIN en el servidor"
 LINEA="$MIN $HORA * * * $APP/venv/bin/python $APP/bot.py >/dev/null 2>>$APP/logs/cron.err"
-{ crontab -u "$USR" -l 2>/dev/null | grep -vF "$APP/bot.py" || true; echo "$LINEA"; } | crontab -u "$USR" -
+# Cada 5 minutos revisa si el panel pidió enviar ya a alguien (primer pago, reactivación): sin pendientes termina en
+# un segundo y no consulta ningún portal. Solo se usa si el .env tiene PANEL_URL y PANEL_TOKEN.
+LINEA_PENDIENTES="*/5 * * * * $APP/venv/bin/python $APP/bot.py --pendientes >/dev/null 2>>$APP/logs/cron.err"
+{ crontab -u "$USR" -l 2>/dev/null | grep -vF "$APP/bot.py" || true; echo "$LINEA"; grep -q '^PANEL_URL=' "$APP/.env" && echo "$LINEA_PENDIENTES"; true; } | crontab -u "$USR" -
 crontab -u "$USR" -l
 
 echo "== 6. Prueba --dry-run como $USR =="

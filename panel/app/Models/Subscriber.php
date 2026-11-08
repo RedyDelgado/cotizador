@@ -13,7 +13,7 @@ class Subscriber extends Model
     protected $fillable = [
         'name', 'state_key', 'note', 'emails', 'keywords', 'entities', 'regions', 'include_uniq',
         'job_keywords', 'job_regions', 'job_min_salary', 'full_report', 'paused', 'last_sent_at',
-        'paid_until', 'telegram_chat_id', 'telegram_link_code', 'last_reminder',
+        'paid_until', 'send_now', 'telegram_chat_id', 'telegram_link_code', 'last_reminder',
     ];
 
     protected static function booted(): void
@@ -40,6 +40,7 @@ class Subscriber extends Model
             'job_min_salary' => 'integer',
             'last_sent_at' => 'datetime',
             'paid_until' => 'date',
+            'send_now' => 'boolean',
         ];
     }
 
@@ -57,6 +58,19 @@ class Subscriber extends Model
     public function scopeDeliverable(Builder $query): Builder
     {
         return $query->where('paused', false)->whereDate('paid_until', '>=', today());
+    }
+
+    /** Filtro de la tabla por estado de cobro: vigentes, por-vencer, vencidos, sin-pago o pausados. */
+    public function scopeBilling(Builder $query, ?string $status): Builder
+    {
+        return match ($status) {
+            'vigentes' => $query->deliverable(),
+            'por-vencer' => $query->active()->whereDate('paid_until', '>=', today())->whereDate('paid_until', '<=', today()->addDays(config('panel.expiring_days'))),
+            'vencidos' => $query->whereDate('paid_until', '<', today()),
+            'sin-pago' => $query->whereNull('paid_until'),
+            'pausados' => $query->where('paused', true),
+            default => $query,
+        };
     }
 
     /** Busca por nombre, correo o cualquier interés (los arrays JSON se guardan como texto). */
@@ -105,6 +119,7 @@ class Subscriber extends Model
     public function registerPayment(array $data): Payment
     {
         return DB::transaction(function () use ($data): Payment {
+            $wasInactive = ! $this->paid_until || $this->paid_until->lt(today()); // primer pago o reactivación
             $days = (int) ($data['days'] ?? config('panel.days'));
             $start = $this->paid_until && $this->paid_until->gte(today()) ? $this->paid_until->copy()->addDay() : today();
             $end = $start->copy()->addDays($days - 1);
@@ -119,7 +134,8 @@ class Subscriber extends Model
                 'period_end' => $end,
                 'note' => $data['note'] ?? null,
             ]);
-            $this->update(['paid_until' => $end, 'last_reminder' => null]);
+            // al empezar (o volver) el servicio recibe su informe enseguida, sin esperar a mañana
+            $this->update(['paid_until' => $end, 'last_reminder' => null, 'send_now' => $this->send_now || $wasInactive]);
 
             return $payment;
         });

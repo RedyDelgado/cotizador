@@ -11,6 +11,7 @@ import functools
 import html
 import re
 from datetime import datetime
+from urllib.parse import quote
 from pathlib import Path
 
 import pymupdf
@@ -18,6 +19,8 @@ import pymupdf
 import empleos
 import seace
 import uniq
+
+SERVIR_URL = empleos.SERVIR  # (texto_telegram recibe un parámetro llamado «empleos» que tapa el módulo)
 
 DIAS_ALERTA = 2   # "cierra pronto" si quedan 2 días o menos
 MAX_FILAS = 15    # filas por palabra clave o entidad
@@ -431,7 +434,7 @@ def enlace_bases(x):
     if x.get("bases"):
         enlaces.append(f'<a href="{h(x["bases"])}" {estilo}>{h(x.get("bases_etiqueta", "Descargar bases"))}</a>')
     if x["id"].startswith("p-") and x.get("codigo"):
-        enlaces.append(f'<a href="{h(seace.BUSCADOR_SEACE3)}" {estilo}>Buscar {h(x["codigo"])} en SEACE 3.0</a>')
+        enlaces.append(f'<a href="{h(seace.BUSCADOR_SEACE3 + "#seace=" + quote(x["codigo"], safe="/-"))}" {estilo}>Buscar {h(x["codigo"])} en SEACE 3.0</a>')
     if not enlaces:
         return ""
     return (f'<div style="margin-top:4px;font-size:12px;line-height:18px">'
@@ -627,9 +630,10 @@ def html_empleos(grupos, ahora, completo=True, enlaces=None):
             filas = fila_nota("Sin ofertas que coincidan hoy.", primera=True)
         salida += subtitulo(nombre, plural(len(items), "oferta", "ofertas"), (enlaces or {}).get(nombre), "Buscar en Empleos Perú")
         salida += tabla([("Oferta", "left"), ("Sueldo", "right")] if items else [], filas)
-    return (salida + f'<p style="margin:4px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">Talento Perú (SERVIR) no permite '
-            f'enlazar una búsqueda: <a href="{h(empleos.SERVIR)}" style="color:{C["enlace"]};text-decoration:none;font-weight:600">'
-            f'abre su buscador</a> y elige el departamento.</p>')
+    return (salida + f'<p style="margin:4px 0 0;font-size:12px;line-height:18px;color:{C["suave"]}">Talento Perú (SERVIR) no tiene un enlace por oferta: '
+            f'el de cada oferta <a href="{h(empleos.SERVIR)}" style="color:{C["enlace"]};text-decoration:none;font-weight:600">'
+            f'abre su buscador</a>. Con el script de NEOESTADO instalado en tu navegador se rellena y busca solo; '
+            f'sin él, escribe el número de convocatoria que figura en la oferta.</p>')
 
 
 def html_uniq(convs, ahora, completo=True):
@@ -914,6 +918,8 @@ def texto_telegram(ahora, perfil, convs, grupos, seguidas=(), zonas=(), empleos=
         lineas.append("\n<b>Empleos</b>")
         for o in ofertas_nuevas[:5]:
             lineas.append(f"• {enlace(o['url'], o['titulo'])}\n  {h(nombre_propio(o['entidad']))} · {h(o['sueldo'] or 'sueldo no indicado')}")
+            if o["url"].startswith(SERVIR_URL) and o.get("convocatoria"):  # SERVIR no enlaza a una oferta: se da el número (toca para copiarlo)
+                lineas.append(f"  SERVIR · convocatoria <code>{h(o['convocatoria'])}</code> (tócala para copiar y pégala en «Número de convocatoria»)")
         if len(ofertas_nuevas) > 5:
             lineas.append(f"… y {len(ofertas_nuevas) - 5} más en tu correo.")
     if not (destacados or uniq_nuevas or ofertas_nuevas or en_regiones):

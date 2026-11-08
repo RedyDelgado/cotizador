@@ -4,10 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreSubscriberRequest;
 use App\Http\Requests\UpdateSubscriberRequest;
-use App\Models\Payment;
 use App\Models\Subscriber;
 use App\Services\Telegram;
 use App\Support\Regions;
+use App\Support\SubscriberStats;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -17,15 +17,20 @@ class SubscriberController extends Controller
 {
     public function index(Request $request): View
     {
-        $subscribers = Subscriber::query()->search($request->query('q'))->orderBy('name')->get();
+        $status = $request->query('estado');
+        $subscribers = Subscriber::query()
+            ->search($request->query('q'))
+            ->billing($status)
+            ->latest()      // los más nuevos primero (fecha de creación; el id desempata)
+            ->latest('id')
+            ->paginate(10)
+            ->withQueryString();
 
         return view('subscribers.index', [
             'subscribers' => $subscribers,
-            'total' => Subscriber::count(),
-            'paying' => Subscriber::deliverable()->count(),
-            'expiring' => Subscriber::deliverable()->whereDate('paid_until', '<=', today()->addDays(config('panel.expiring_days')))->count(),
-            'income' => Payment::whereBetween('paid_on', [today()->startOfMonth(), today()->endOfMonth()])->sum('amount'),
+            'stats' => SubscriberStats::make(),
             'q' => (string) $request->query('q'),
+            'status' => (string) $status,
         ]);
     }
 
@@ -62,6 +67,17 @@ class SubscriberController extends Controller
         $subscriber->delete();
 
         return redirect()->route('subscribers.index')->with('status', "{$subscriber->name} eliminado.");
+    }
+
+    /** «Enviar ahora»: el bot lo recoge en unos minutos. Solo si tiene el servicio vigente. */
+    public function sendNow(Subscriber $subscriber): RedirectResponse
+    {
+        if ($subscriber->paused || ! $subscriber->paid_until || $subscriber->paid_until->lt(today())) {
+            return back()->with('status', "{$subscriber->name} no tiene el servicio vigente: no se le envía nada.");
+        }
+        $subscriber->update(['send_now' => true]);
+
+        return back()->with('status', "{$subscriber->name}: el informe sale en unos minutos.");
     }
 
     public function toggle(Subscriber $subscriber): RedirectResponse

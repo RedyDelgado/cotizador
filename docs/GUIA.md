@@ -217,6 +217,14 @@ Cada suscriptor paga **S/ 5 por 15 días** (`PANEL_PRICE`, `PANEL_DAYS`, `PANEL_
   registrar un pago le llega la confirmación.
 - Las tareas del panel (`telegram:poll`, `billing:reminders`) se programan en `routes/console.php`.
 
+## Envío inmediato tras el primer pago
+
+El panel marca `send_now` al registrar el primer pago de un suscriptor o al reactivarlo tras vencer (una renovación con el
+servicio vigente no). `python bot.py --pendientes` pide al panel solo a esos suscriptores (`GET /api/bot/profiles?pending=1`),
+les envía el informe y el aviso `POST /api/bot/sent` apaga la marca. Sin pendientes termina enseguida y no consulta ningún
+portal; si el panel no responde no envía nada (nunca cae a `perfiles.ini`). `install.sh` lo programa cada 5 minutos cuando el
+`.env` tiene `PANEL_URL`. Un cerrojo (`data/bot.lock`) evita que corra a la vez que la ejecución diaria.
+
 ## Probarlo en local con Docker
 
 Sirve para ver el panel y los correos sin tocar el VPS ni enviar nada real (el VPS no usa Docker: sigue con `install.sh`).

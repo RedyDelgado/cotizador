@@ -317,6 +317,9 @@ civil, asistente = servir_ofertas
 assert civil["lugar"] == "CUSCO/ECHARATI" and civil["sueldo_min"] == 4500 and civil["sueldo"] == "S/ 4,500" and civil["vacantes"] == "2"
 assert civil["publicado"] == "2026-10-21" and civil["cierre"].day == 3 and civil["cierre"].tzinfo is not None and civil["id"].startswith("s-")
 assert asistente["sueldo_max"] is None and asistente["sueldo"] == "" and civil["id"] != asistente["id"]
+assert civil["url"] == empleos.SERVIR + "#conv=276-6&puesto=INGENIERO+CIVIL+IV"       # el script de navegador lo lee tras el #
+assert empleos.enlace_servir("", "X") == empleos.SERVIR
+assert "#seace=LP-ABR-22-2026-DEC-OC-MPLC/LC-1" in informe.enlace_bases({"id": "p-1", "codigo": "LP-ABR-22-2026-DEC-OC-MPLC/LC-1", "bases": None})
 assert empleos._paginas(pagina) == (1, 19) and empleos._boton_siguiente(pagina) == "frmLstOfertsLabo:j_idt62"
 assert empleos.numero("S/. 3,651.00") == 3651 and empleos.numero("A convenir") is None
 
@@ -456,7 +459,7 @@ class RespuestaPanel:
 
 
 pedidos, requests_get = [], bot.requests.get
-bot.requests.get = lambda url, headers=None, timeout=0: (pedidos.append((url, headers)), RespuestaPanel())[1]
+bot.requests.get = lambda url, headers=None, timeout=0, params=None: (pedidos.append((url, headers, params)), RespuestaPanel())[1]
 os.environ.update(PANEL_URL="http://panel:8000/", PANEL_TOKEN="tok")
 try:
     del_panel = bot.cargar_perfiles()
@@ -464,9 +467,13 @@ try:
     assert del_panel[0]["uniq"] and del_panel[0]["entidades"] == [uniq.NOMBRE, "UGEL LA CONVENCION"] and del_panel[0]["empleo_sueldo"] == 2500
     assert not del_panel[0]["completo"] and pedidos[0][0] == "http://panel:8000/api/bot/profiles" and pedidos[0][1]["Authorization"] == "Bearer tok"
 
-    def panel_caido(url, headers=None, timeout=0):
+    assert bot.cargar_perfiles(pendientes=True) and pedidos[-1][2] == {"pending": 1}   # «enviar ya»: pide solo los pendientes
+    assert pedidos[0][2] is None
+
+    def panel_caido(url, headers=None, timeout=0, params=None):
         raise bot.requests.ConnectionError("sin conexión")
     bot.requests.get = panel_caido
+    assert bot.cargar_perfiles(pendientes=True) == []      # sin panel no hay pendientes, y jamás se cae a perfiles.ini
     con_ini("[a]\ncorreos = a@x.com\npalabras_clave = cemento\n")  # el respaldo: perfiles.ini
     assert [p["nombre"] for p in bot.cargar_perfiles()] == ["a"]
 finally:
@@ -484,6 +491,7 @@ resumen_tg = informe.texto_telegram(hoy_tg, perfil_tg, [], [("cemento", [urgente
 assert "1 novedad en tus búsquedas" in resumen_tg and "1 cierra pronto" in resumen_tg, resumen_tg
 assert resumen_tg.index("Adquisicion de cemento") < resumen_tg.index("Servicio de vigilancia")   # lo que cierra antes, primero
 assert 'href="https://x/90"' in resumen_tg and "Echarati" in resumen_tg and "1 oferta de empleo nueva" in resumen_tg and "S/ 4,500" in resumen_tg
+assert "convocatoria <code>276-6</code>" in resumen_tg
 assert "vence en 2 días (27/10/2026)" in resumen_tg and resumen_tg.endswith("Informe completo en tu correo.") and len(resumen_tg) < informe.LIMITE_TELEGRAM
 assert "Hoy no hay novedades" in informe.texto_telegram(hoy_tg, {}, None, [], [], [], None)
 largo = [dict(nuevo_tg, id=f"p-{n}", titulo="X" * 79) for n in range(300)]

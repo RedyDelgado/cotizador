@@ -26,6 +26,6 @@ class PaymentController extends Controller
         }
 
         return redirect()->route('subscribers.payments.index', $subscriber)
-            ->with('status', 'Pago registrado: vigente hasta el '.$payment->period_end->format('d/m/Y').'.');
+            ->with('status', 'Pago registrado: vigente hasta el '.$payment->period_end->format('d/m/Y').'.'.($subscriber->send_now ? ' Su primer informe sale en unos minutos.' : ''));
     }
 }

@@ -16,5 +16,6 @@ Route::middleware('auth')->group(function () {
     Route::resource('subscribers', SubscriberController::class)->except('show');
     Route::get('/subscribers/{subscriber}/payments', [PaymentController::class, 'index'])->name('subscribers.payments.index');
     Route::post('/subscribers/{subscriber}/payments', [PaymentController::class, 'store'])->name('subscribers.payments.store');
+    Route::post('/subscribers/{subscriber}/send-now', [SubscriberController::class, 'sendNow'])->name('subscribers.send-now');
     Route::patch('/subscribers/{subscriber}/toggle', [SubscriberController::class, 'toggle'])->name('subscribers.toggle');
 });

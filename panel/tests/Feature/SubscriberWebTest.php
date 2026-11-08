@@ -47,7 +47,7 @@ class SubscriberWebTest extends TestCase
         $this->assertFalse($s->include_uniq);
         $this->assertNull($s->job_min_salary);
 
-        $this->get('/subscribers')->assertSee('Grupo Indescar')->assertSee('2 regiones');
+        $this->get('/subscribers')->assertSee('Grupo Indescar')->assertSee('2 reg.');
         $this->get('/subscribers?q=fierro')->assertSee('Grupo Indescar');
         $this->get('/subscribers?q=inexistente')->assertDontSee('Grupo Indescar');
         $this->get("/subscribers/{$s->id}/edit")->assertOk()->assertSee('Grupo Indescar');

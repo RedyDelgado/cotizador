@@ -110,6 +110,12 @@ def _fecha(texto):
         return None
 
 
+def enlace_servir(convocatoria, puesto):
+    """SERVIR no tiene una dirección por oferta. Se abre su buscador con el número y el puesto al final (#...): el
+    servidor lo ignora, pero el script de userscripts/neoestado.user.js los escribe y busca solo; sin el script, abre el buscador."""
+    return SERVIR + ("#" + urlencode({"conv": convocatoria, "puesto": puesto}) if convocatoria else "")
+
+
 def ofertas_de_pagina(html):
     """Ofertas de una respuesta de SERVIR (HTML de la página o respuesta parcial de PrimeFaces)."""
     ofertas = []
@@ -126,7 +132,7 @@ def ofertas_de_pagina(html):
              "sueldo": plata(sueldo) if sueldo else "", "publicado": _fecha(_campo(bloque, "Fecha Inicio de Publicaci.n:")),
              "cierre": _fecha(_campo(bloque, "Fecha Fin de Publicaci.n:")), "convocatoria": convocatoria,
              "vacantes": _campo(bloque, "Cantidad de Vacantes:"), "detalle": f"Convocatoria {convocatoria}" if convocatoria else "",
-             "url": SERVIR}
+             "url": enlace_servir(convocatoria, _texto(titulo.group(1)))}
         if o["publicado"]:
             o["publicado"] = f"{o['publicado']:%Y-%m-%d}"
         if o["cierre"]:  # la oferta vale hasta el final de ese día, hora de Lima

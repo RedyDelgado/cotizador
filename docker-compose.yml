@@ -23,12 +23,14 @@ x-bot: &bot
     # Telegram de mentira (docker/telegram_falso.py). Con uno real: TELEGRAM_BOT_TOKEN y TELEGRAM_API_URL=https://api.telegram.org
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-token-falso-local}
     TELEGRAM_API_URL: ${TELEGRAM_API_URL:-http://telegram-falso:8081}
-    SMTP_HOST: mailpit
-    SMTP_PORT: "1025"
-    SMTP_SEGURO: "no"
-    SMTP_USER: neoestado@local.test
-    SMTP_PASS: sin-uso
-    MAIL_FROM_NAME: NEOESTADO (local)
+    # Para enviar correos de verdad desde Docker, en el .env de la raíz: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587,
+    # SMTP_SEGURO=si, SMTP_USER=tu_cuenta@gmail.com y SMTP_PASS=contraseña_de_aplicación
+    SMTP_HOST: ${SMTP_HOST:-mailpit}
+    SMTP_PORT: ${SMTP_PORT:-1025}
+    SMTP_SEGURO: ${SMTP_SEGURO:-no}
+    SMTP_USER: ${SMTP_USER:-neoestado@local.test}
+    SMTP_PASS: ${SMTP_PASS:-sin-uso}
+    MAIL_FROM_NAME: ${MAIL_FROM_NAME:-NEOESTADO (local)}
   volumes:
     - ./docker-data/data:/app/data
     - ./docker-data/logs:/app/logs
@@ -86,6 +88,12 @@ services:
   bot:
     <<: *bot
     profiles: ["manual"]
+
+  # Envía enseguida a quien el panel marcó (primer pago, reactivación o «Enviar informe ahora»): revisa cada 30 s
+  bot-pendientes:
+    <<: *bot
+    command: ["sh", "-c", "while true; do python bot.py --pendientes; sleep 30; done"]
+    restart: unless-stopped
 
   # Panel anterior en Python, sobre perfiles.ini
   panel-python:
