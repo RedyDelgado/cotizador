@@ -16,6 +16,7 @@ import os
 import re
 import smtplib
 import sys
+import time
 import traceback
 from datetime import datetime
 from email.message import EmailMessage
@@ -382,7 +383,7 @@ def enviar(asunto, texto, cuerpo_html, destinos, adjunto_html=None, nombre_adjun
 # ese archivo hay un solo perfil con lo que diga el .env (MAIL_TO, PALABRAS_CLAVE, ENTIDADES, REGIONES).
 
 CLAVES_PERFIL = {"correos", "palabras_clave", "entidades", "regiones", "uniq", "completo", "pausado", "nota",
-                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min", "clave", "telegram", "vence"}
+                 "empleo_palabras", "empleo_regiones", "empleo_sueldo_min", "clave", "telegram", "telegram_enlace", "vence"}
 
 
 def lista(texto):
@@ -535,7 +536,8 @@ def perfil_de_seccion(nombre, sec):
               "entidades": entidades, "regiones": lista(sec.get("regiones")), "nota": (sec.get("nota") or "").strip(),
               "uniq": sigue_uniq or es_si(sec.get("uniq"), por_defecto=False), "completo": es_si(sec.get("completo")),
               "pausado": es_si(sec.get("pausado"), por_defecto=False), "clave": (sec.get("clave") or "").strip(),
-              "telegram": (sec.get("telegram") or "").strip(), "vence": fecha_vence(nombre, sec.get("vence")),
+              "telegram": (sec.get("telegram") or "").strip(), "telegram_enlace": (sec.get("telegram_enlace") or "").strip(),
+              "vence": fecha_vence(nombre, sec.get("vence")),
               "empleo_palabras": lista(sec.get("empleo_palabras")),
               "empleo_regiones": lista(sec.get("empleo_regiones")), "empleo_sueldo": sueldo_minimo(nombre, sec.get("empleo_sueldo_min"))}
     # Las ofertas de empleo se reciben si el bloque pide algo de ellas (palabras, regiones o un sueldo mínimo).
@@ -600,7 +602,8 @@ def generar(perfil, s, ahora, estado, uniq_base, uniq_error):
         raise RuntimeError("Ninguna fuente respondió:\n" + "\n".join(f"- {n}: {d}" for n, _, d, _ in fuentes))
     asunto, texto, cuerpo = informe.construir_informe(ahora, perfil["palabras"], convs, grupos, fuentes, seguidas, zonas,
                                                       perfil["completo"], perfil["uniq"],
-                                                      grupos_empleo, informe.nota_empleos(perfil), enlaces_empleo)
+                                                      grupos_empleo, informe.nota_empleos(perfil), enlaces_empleo,
+                                                      None if perfil.get("telegram") else perfil.get("telegram_enlace"))
     ids_uniq = sorted(c["id"] for c in convs) if convs is not None else None
     resumen_telegram = informe.texto_telegram(ahora, perfil, convs, grupos, seguidas, zonas, grupos_empleo)
     return (asunto, texto, cuerpo, ids_uniq, seace_ids, seace_fallo or entidades_fallo or zonas_fallo,
@@ -617,9 +620,10 @@ def destinatarios_de_alerta(perfiles):
 _cerrojo = None
 
 
-def tomar_cerrojo():
+def tomar_cerrojo(esperar=0):
     """Una sola ejecución a la vez (la diaria y la de pendientes no deben pisarse el estado). True si lo obtuvo.
-    En Windows no hay fcntl: ahí no se bloquea (solo desarrollo)."""
+    esperar: segundos que aguarda su turno si otra ejecución lo tiene (la diaria espera; la de pendientes no:
+    a las 07:00 corren las dos a la vez y la diaria no debe perderse). En Windows no hay fcntl (solo desarrollo)."""
     global _cerrojo
     try:
         import fcntl
@@ -627,11 +631,15 @@ def tomar_cerrojo():
         return True
     ESTADO.parent.mkdir(exist_ok=True)
     _cerrojo = open(ESTADO.parent / "bot.lock", "w")
-    try:
-        fcntl.flock(_cerrojo, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
+    limite = time.monotonic() + esperar
+    while True:
+        try:
+            fcntl.flock(_cerrojo, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= limite:
+                return False
+            time.sleep(5)
 
 
 def main():
@@ -662,9 +670,13 @@ def main():
     if args.pendientes and not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
         print("--pendientes necesita PANEL_URL y PANEL_TOKEN (el panel de suscriptores).", file=sys.stderr)
         return 1
-    if not tomar_cerrojo():
-        log.info("Ya hay otra ejecución en curso; esta se omite")
-        return 0
+    if not tomar_cerrojo(esperar=0 if args.pendientes else 3600):
+        if args.pendientes:
+            return 0  # vuelve a intentarlo en 5 minutos
+        log.error("Otra ejecución tuvo el candado más de una hora; el informe diario no salió")
+        fallos.append("El informe diario no salió: otra ejecución del bot no terminó en una hora.")
+        avisar([])
+        return 1
     try:
         perfiles = cargar_perfiles(pendientes=args.pendientes)
     except ValueError as e:
