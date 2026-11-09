@@ -4,7 +4,7 @@
 #   bash preparar.sh              # una vez: crea .env con las claves (no se sube a GitHub)
 #   docker compose up -d --build  # levanta el panel
 #
-# Entrada desde internet:  https://IP_DEL_VPS:8443  (certificado propio + clave del servidor + usuario del panel)
+# Entrada desde internet:  https://IP_DEL_VPS:8443  (certificado propio + login del panel)
 # El bot del VPS lo usa por dentro:  http://127.0.0.1:8010  (no se publica hacia afuera)
 
 name: neoestado
@@ -42,7 +42,7 @@ services:
       SKIP_MIGRATE: "1"
     depends_on: [panel]
 
-  web:                              # HTTPS con certificado propio + clave previa, delante del panel
+  web:                              # HTTPS con certificado propio, delante del panel
     image: caddy:2.10-alpine
     container_name: neoestado-web
     env_file: .env

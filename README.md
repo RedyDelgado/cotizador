@@ -229,7 +229,7 @@ contenedores, red y volúmenes con prefijo `neoestado-`, y solo publica el puert
 ```bash
 cd /root/cotizador && git pull
 cd deploy/vps
-bash preparar.sh               # pide tu correo y claves del panel, la clave previa y el token de Telegram
+bash preparar.sh               # pide tu correo y contraseña del panel y el token de Telegram
 docker compose up -d --build   # levanta el panel (la primera vez tarda unos minutos)
 bash /root/cotizador/install.sh   # actualiza el bot y activa el envío inmediato tras cada pago
 ```
@@ -237,12 +237,11 @@ bash /root/cotizador/install.sh   # actualiza el bot y activa el envío inmediat
 Entra a **`https://IP_DEL_VPS:8443`**:
 
 1. El navegador avisa del certificado (no hay dominio). Pulsa *Avanzado → Continuar*; la conexión va cifrada igual.
-2. Te pide la **clave previa** (usuario `neoestado` y la contraseña que pusiste).
-3. Entras con **tu correo y contraseña** del panel.
+2. Entras con **tu correo y contraseña** del panel.
 
 | Qué | Dónde |
 |---|---|
-| Panel desde internet | `https://IP:8443` (HTTPS + clave previa + login) |
+| Panel desde internet | `https://IP:8443` (HTTPS + login con límite de intentos) |
 | Panel para el bot (solo dentro del servidor) | `http://127.0.0.1:8010` |
 | Claves del panel | `deploy/vps/.env` (permisos 600, no va a GitHub) |
 | Datos (suscriptores, pagos) | volumen Docker `neoestado-panel-data` |

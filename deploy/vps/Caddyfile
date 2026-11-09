@@ -1,6 +1,6 @@
 # Entrada pública al panel: https://IP:8443
 # - tls internal: certificado propio para la IP (el navegador avisa la primera vez; la conexión va cifrada igual)
-# - basic_auth: una clave antes de llegar siquiera al login del panel
+# - el acceso lo controla el login del panel (con límite de intentos fallidos)
 {
 	auto_https disable_redirects
 	admin off
@@ -10,10 +10,6 @@
 
 {$PANEL_HOST}:8443 {
 	tls internal
-
-	basic_auth {
-		{$BASIC_USER} {$BASIC_HASH}
-	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"

@@ -36,10 +36,6 @@ pedir PANEL_HOST "IP pública del VPS" "$IP_DETECTADA"
 pedir ADMIN_EMAIL "Tu correo para entrar al panel" "redy.delgado@gmail.com"
 clave ADMIN_PASSWORD "Contraseña del panel (nueva, no la de Gmail)"
 
-echo "== Clave previa (la pide el navegador antes del login) =="
-pedir BASIC_USER "Usuario" "neoestado"
-clave BASIC_PASS "Contraseña de la clave previa (distinta de la del panel)"
-BASIC_HASH=$(docker run --rm caddy:2.10-alpine caddy hash-password --plaintext "$BASIC_PASS")
 
 echo "== Telegram (déjalo vacío si aún no tienes el bot) =="
 pedir TELEGRAM_BOT_TOKEN "Token de @BotFather" "" oculto
@@ -57,8 +53,6 @@ ADMIN_NAME='Administrador'
 ADMIN_EMAIL='${ADMIN_EMAIL}'
 ADMIN_PASSWORD='${ADMIN_PASSWORD}'
 PANEL_BOT_TOKEN='${PANEL_BOT_TOKEN}'
-BASIC_USER='${BASIC_USER}'
-BASIC_HASH='${BASIC_HASH}'
 TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN}'
 TELEGRAM_BOT_USERNAME='${TELEGRAM_BOT_USERNAME}'
 TELEGRAM_API_URL='https://api.telegram.org'
