@@ -525,6 +525,23 @@ con_vence = con_ini("[a]\ncorreos = a@x.com\npalabras_clave = cemento\ntelegram 
 assert con_vence["telegram"] == "555" and con_vence["vence"] == date(2026, 11, 8)
 debe_fallar("[a]\ncorreos = a@x.com\npalabras_clave = cemento\nvence = pronto\n", "vence")
 
+# Módulo «Envíos»: el bot informa al panel cómo le fue con cada suscriptor; sin panel configurado no hace nada.
+informes, requests_post_2 = [], bot.requests.post
+bot.requests.post = lambda url, json=None, headers=None, timeout=0: informes.append((url, json))
+try:
+    bot.informar_envio({"nombre": "Ana", "clave": "ana-1"}, "diario", "enviado", "sin_vincular")
+    assert informes == []                                                      # sin PANEL_URL/PANEL_TOKEN
+    os.environ.update(PANEL_URL="http://panel:8000", PANEL_TOKEN="tok")
+    bot.informar_envio({"nombre": "Ana", "clave": "ana-1"}, "pendiente", "error", "omitido", "x" * 900)
+    url_envio, cuerpo_envio = informes[0]
+    assert url_envio == "http://panel:8000/api/bot/delivery" and cuerpo_envio["clave"] == "ana-1" and cuerpo_envio["tipo"] == "pendiente"
+    assert cuerpo_envio["correo"] == "error" and len(cuerpo_envio["detalle"]) == 500
+    bot.informar_envio({"nombre": "Viejo", "legacy": True}, "diario", "enviado", "omitido")
+    assert len(informes) == 1                                                  # el perfil del .env no existe en el panel
+finally:
+    bot.requests.post = requests_post_2
+    os.environ.pop("PANEL_URL", None); os.environ.pop("PANEL_TOKEN", None)
+
 # Panel de suscriptores (admin.py): crea, edita, pausa, renombra, elimina y restaura sobre un perfiles.ini temporal.
 import json
 import admin

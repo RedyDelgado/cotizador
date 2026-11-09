@@ -72,6 +72,7 @@ if [[ -f $BOT_ENV ]]; then
     echo "  PANEL_URL=http://127.0.0.1:8010   PANEL_TOKEN=(el token generado)   TELEGRAM_BOT_TOKEN=(el de arriba)"
     if confirmar "¿Agregarlas? (se guarda una copia en ${BOT_ENV}.respaldo)"; then
         cp -p "$BOT_ENV" "${BOT_ENV}.respaldo"
+        [[ -n $(tail -c1 "$BOT_ENV") ]] && echo >> "$BOT_ENV"   # si el archivo no termina en salto de línea, la nueva línea se pegaría a la anterior
         grep -q '^PANEL_URL=' "$BOT_ENV" || echo "PANEL_URL=http://127.0.0.1:8010" >> "$BOT_ENV"
         grep -q '^PANEL_TOKEN=' "$BOT_ENV" || echo "PANEL_TOKEN=${PANEL_BOT_TOKEN}" >> "$BOT_ENV"
         if [[ -n $TELEGRAM_BOT_TOKEN ]] && ! grep -q '^TELEGRAM_BOT_TOKEN=' "$BOT_ENV"; then

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\DeliveryController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\SubscriberController;
 use Illuminate\Support\Facades\Route;
@@ -13,6 +14,7 @@ Route::middleware('guest')->group(function () {
 Route::middleware('auth')->group(function () {
     Route::redirect('/', '/subscribers');
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+    Route::get('/envios', [DeliveryController::class, 'index'])->name('deliveries.index');
     Route::resource('subscribers', SubscriberController::class)->except('show');
     Route::get('/subscribers/{subscriber}/payments', [PaymentController::class, 'index'])->name('subscribers.payments.index');
     Route::post('/subscribers/{subscriber}/payments', [PaymentController::class, 'store'])->name('subscribers.payments.store');

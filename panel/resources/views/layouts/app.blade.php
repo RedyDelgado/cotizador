@@ -14,6 +14,13 @@
             <div class="font-semibold text-marca-950">Suscriptores</div>
             <div class="text-xs text-slate-500">NEOESTADO · quién recibe qué</div>
         </div>
+        @auth
+            <nav class="ml-4 flex gap-1 text-sm" aria-label="Secciones">
+                @foreach (['subscribers.index' => 'Suscriptores', 'deliveries.index' => 'Envíos'] as $ruta => $texto)
+                    <a href="{{ route($ruta) }}" @class(['rounded-lg px-3 py-1.5 font-medium', 'bg-marca-50 text-marca-800' => request()->routeIs(str_replace('.index', '.*', $ruta)), 'text-slate-600 hover:bg-slate-100' => ! request()->routeIs(str_replace('.index', '.*', $ruta))])>{{ $texto }}</a>
+                @endforeach
+            </nav>
+        @endauth
         <div class="flex-1"></div>
         @auth
             <span class="hidden text-sm text-slate-500 sm:inline">{{ auth()->user()->email }}</span>

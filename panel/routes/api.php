@@ -17,4 +17,5 @@ Route::middleware(['auth:sanctum', 'abilities:subscribers', 'throttle:120,1'])->
 Route::prefix('bot')->middleware(['auth:sanctum', 'abilities:bot', 'throttle:60,1'])->group(function () {
     Route::get('profiles', [BotController::class, 'profiles']);
     Route::post('sent', [BotController::class, 'sent']);
+    Route::post('delivery', [BotController::class, 'delivery']);
 });

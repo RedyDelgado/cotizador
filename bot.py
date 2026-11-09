@@ -452,15 +452,17 @@ def enviar_telegram(chat_id, texto):
         return False
 
 
-def avisar_envio_al_panel(perfil):
-    """Anota en el panel que ya se envió el informe (su "último envío"). Si falla no importa: el correo ya salió."""
+def informar_envio(perfil, tipo, correo, telegram, detalle=""):
+    """Anota en el panel (módulo «Envíos») cómo le fue a este suscriptor: tipo diario/pendiente/manual; correo
+    enviado/error; telegram enviado/error/sin_vincular. Si el panel no responde no importa: el correo ya salió o ya falló."""
     if perfil.get("legacy") or not (os.environ.get("PANEL_URL") and os.environ.get("PANEL_TOKEN")):
         return
     try:
-        requests.post(os.environ["PANEL_URL"].rstrip("/") + "/api/bot/sent", json={"nombre": perfil["nombre"]},
-                      headers=_cabeceras_panel(), timeout=15)
+        requests.post(os.environ["PANEL_URL"].rstrip("/") + "/api/bot/delivery", headers=_cabeceras_panel(), timeout=15,
+                      json={"nombre": perfil["nombre"], "clave": perfil.get("clave") or perfil["nombre"], "tipo": tipo,
+                            "correo": correo, "telegram": telegram, "detalle": (detalle or "")[:500]})
     except Exception as e:
-        log.warning("No se pudo avisar el envío al panel: %s", error_corto(e))
+        log.warning("No se pudo informar el envío al panel: %s", error_corto(e))
 
 
 def cargar_perfiles(pendientes=False):
@@ -687,6 +689,7 @@ def main():
         estado = cargar_estado()
         s = sesion()
         uniq_base, uniq_error = descargar_uniq(s, ahora) if any(x["uniq"] for x in perfiles) else (None, None)
+        tipo = "pendiente" if args.pendientes else "manual" if args.perfil else "diario"  # para el módulo «Envíos»
         for perfil in perfiles:
             try:
                 log.info("Perfil %s", perfil["nombre"])
@@ -713,12 +716,17 @@ def main():
                         propio["empleos"] = sorted(empleo_ids | (set(propio.get("empleos", [])) if empleo_fallo else set()))
                     propio["enviado"] = ahora.isoformat(timespec="minutes")  # lo muestra el panel (admin.py)
                     guardar_estado(estado, ahora)
-                    if perfil.get("telegram") and enviar_telegram(perfil["telegram"], resumen_telegram):
-                        log.info("Resumen enviado por Telegram a [%s]", perfil["nombre"])
-                    avisar_envio_al_panel(perfil)
-            except Exception:
+                    telegram = "sin_vincular"
+                    if perfil.get("telegram"):
+                        telegram = "enviado" if enviar_telegram(perfil["telegram"], resumen_telegram) else "error"
+                        if telegram == "enviado":
+                            log.info("Resumen enviado por Telegram a [%s]", perfil["nombre"])
+                    informar_envio(perfil, tipo, "enviado", telegram)
+            except Exception as e:
                 log.exception("No se pudo generar o enviar el informe de [%s]", perfil["nombre"])
                 fallos.append(f"Perfil [{perfil['nombre']}]:\n{traceback.format_exc()}")
+                if not sin_envio:
+                    informar_envio(perfil, tipo, "error", "omitido", error_corto(e))
         avisar(perfiles)
         return 1 if fallos else 0
     finally:
