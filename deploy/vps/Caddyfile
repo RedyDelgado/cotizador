@@ -1,0 +1,27 @@
+# Entrada pública al panel: https://IP:8443
+# - tls internal: certificado propio para la IP (el navegador avisa la primera vez; la conexión va cifrada igual)
+# - basic_auth: una clave antes de llegar siquiera al login del panel
+{
+	auto_https disable_redirects
+	admin off
+	# los navegadores no mandan el nombre del sitio (SNI) cuando se entra por IP: sin esto falla el saludo TLS
+	default_sni {$PANEL_HOST}
+}
+
+{$PANEL_HOST}:8443 {
+	tls internal
+
+	basic_auth {
+		{$BASIC_USER} {$BASIC_HASH}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	reverse_proxy panel:8000
+}

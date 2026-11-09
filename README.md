@@ -223,14 +223,36 @@ Después de cambiar el `.env`, ejecuta `docker compose up -d --force-recreate`. 
 
 ## 7. Ponerlo en producción
 
-1. **Bot en el VPS:** ejecuta `cd /root/cotizador && git pull && bash install.sh`. Crea un usuario propio, un entorno aislado y el cron, y no toca otras aplicaciones del servidor.
-2. **Secretos** en el `.env` del VPS, nunca en el repositorio:
-   - la cuenta de Gmail y su contraseña de aplicación;
-   - `PANEL_URL` y `PANEL_TOKEN`;
-   - `TELEGRAM_BOT_TOKEN`.
-3. **Panel:** corre en cualquier servidor con PHP. Si no quieres abrir puertos, `php artisan panel:export-perfiles` escribe los suscriptores como `perfiles.ini` y el bot los lee sin conexión.
-4. **Telegram:** crea el bot con @BotFather y pon `TELEGRAM_BOT_TOKEN` y `TELEGRAM_BOT_USERNAME` en el `.env` del panel. Deja corriendo `php artisan schedule:work`, o un cron cada minuto con `php artisan schedule:run`.
-5. **Cambia la clave del administrador y el token del bot.** Los de Docker son solo de prueba.
+El VPS ya tiene el **bot** (instalado con `install.sh`). El **panel** va en su propio Docker, sin tocar otros proyectos:
+contenedores, red y volúmenes con prefijo `neoestado-`, y solo publica el puerto **8443**.
+
+```bash
+cd /root/cotizador && git pull
+cd deploy/vps
+bash preparar.sh               # pide tu correo y claves del panel, la clave previa y el token de Telegram
+docker compose up -d --build   # levanta el panel (la primera vez tarda unos minutos)
+bash /root/cotizador/install.sh   # actualiza el bot y activa el envío inmediato tras cada pago
+```
+
+Entra a **`https://IP_DEL_VPS:8443`**:
+
+1. El navegador avisa del certificado (no hay dominio). Pulsa *Avanzado → Continuar*; la conexión va cifrada igual.
+2. Te pide la **clave previa** (usuario `neoestado` y la contraseña que pusiste).
+3. Entras con **tu correo y contraseña** del panel.
+
+| Qué | Dónde |
+|---|---|
+| Panel desde internet | `https://IP:8443` (HTTPS + clave previa + login) |
+| Panel para el bot (solo dentro del servidor) | `http://127.0.0.1:8010` |
+| Claves del panel | `deploy/vps/.env` (permisos 600, no va a GitHub) |
+| Datos (suscriptores, pagos) | volumen Docker `neoestado-panel-data` |
+
+**Comandos útiles** (en `deploy/vps`):
+
+- `docker compose ps`: estado de los contenedores.
+- `docker compose logs -f panel`: registro del panel.
+- `docker compose up -d --build`: actualizar después de un `git pull`.
+- `docker compose down`: apagar sin borrar los datos. Para borrarlo todo, `docker compose down -v`.
 
 ## 8. Atajo para llegar exacto a la oferta
 

@@ -7,3 +7,6 @@ __pycache__/
 perfiles.ini
 
 docker-data/
+
+deploy/vps/.env
+deploy/vps/.env.respaldo

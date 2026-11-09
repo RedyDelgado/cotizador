@@ -20,6 +20,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'ability' => CheckForAnyAbility::class,
         ]);
         $middleware->redirectGuestsTo(fn (Request $request) => route('login'));
+        // Detrás del proxy HTTPS (deploy/vps): sin esto Laravel cree que la visita es http y arma enlaces http.
+        if ($proxies = env('TRUSTED_PROXIES')) {
+            $middleware->trustProxies(at: $proxies === '*' ? '*' : explode(',', $proxies));
+        }
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

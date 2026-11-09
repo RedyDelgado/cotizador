@@ -1,0 +1,66 @@
+# Panel de NEOESTADO en el VPS, aparte de cualquier otro proyecto (nombres, red y volúmenes con prefijo neoestado-).
+#
+#   cd /root/cotizador/deploy/vps
+#   bash preparar.sh              # una vez: crea .env con las claves (no se sube a GitHub)
+#   docker compose up -d --build  # levanta el panel
+#
+# Entrada desde internet:  https://IP_DEL_VPS:8443  (certificado propio + clave del servidor + usuario del panel)
+# El bot del VPS lo usa por dentro:  http://127.0.0.1:8010  (no se publica hacia afuera)
+
+name: neoestado
+
+x-panel: &panel
+  build: ../../panel
+  image: neoestado-panel
+  env_file: .env
+  environment: &entorno
+    APP_ENV: production
+    APP_DEBUG: "false"
+    APP_LOCALE: es
+    SEED_DEMO: "0"
+    TRUSTED_PROXIES: "*"            # solo le llega tráfico del proxy (red neoestado) y del propio servidor
+    SESSION_SECURE_COOKIE: "true"
+    PHP_CLI_SERVER_WORKERS: "4"
+  volumes:
+    - neoestado-panel-data:/data    # base SQLite, clave de la aplicación
+  networks: [neoestado]
+  restart: unless-stopped
+
+services:
+  panel:
+    <<: *panel
+    container_name: neoestado-panel
+    ports:
+      - "127.0.0.1:8010:8000"       # solo dentro del servidor, para el bot (cron de cotizbot)
+
+  planificador:                     # Telegram cada minuto y avisos de vencimiento a diario
+    <<: *panel
+    container_name: neoestado-planificador
+    command: ["php", "artisan", "schedule:work"]
+    environment:
+      <<: *entorno
+      SKIP_MIGRATE: "1"
+    depends_on: [panel]
+
+  web:                              # HTTPS con certificado propio + clave previa, delante del panel
+    image: caddy:2.10-alpine
+    container_name: neoestado-web
+    env_file: .env
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - neoestado-caddy-data:/data
+    networks: [neoestado]
+    depends_on: [panel]
+    restart: unless-stopped
+
+networks:
+  neoestado:
+    name: neoestado
+
+volumes:
+  neoestado-panel-data:
+    name: neoestado-panel-data
+  neoestado-caddy-data:
+    name: neoestado-caddy-data
