@@ -12,6 +12,18 @@ pedir() {  # pedir VARIABLE "Pregunta" [valor por defecto] [oculto]
     [[ $valor == *"'"* ]] && { echo "No uses comillas simples (')."; exit 1; }
     printf -v "$1" '%s' "$valor"
 }
+clave() {  # clave VARIABLE "Pregunta": se escribe dos veces, sin mostrarse; mínimo 10 caracteres
+    local a b
+    while true; do
+        read -rsp "$2 (mínimo 10 caracteres, no se ve al escribir): " a; echo
+        read -rsp "Repítela: " b; echo
+        if [[ $a != "$b" ]]; then echo "No coinciden. Otra vez."; continue; fi
+        if (( ${#a} < 10 )); then echo "Muy corta. Otra vez."; continue; fi
+        if [[ $a == *"'"* ]]; then echo "No uses comillas simples ('). Otra vez."; continue; fi
+        break
+    done
+    printf -v "$1" '%s' "$a"
+}
 
 if [[ -f .env ]] && ! confirmar "Ya existe .env. ¿Reemplazarlo? (se guarda una copia en .env.respaldo)"; then
     echo "Sin cambios."; exit 0
@@ -21,14 +33,12 @@ fi
 IP_DETECTADA=$(hostname -I | awk '{print $1}')
 echo "== Datos del panel =="
 pedir PANEL_HOST "IP pública del VPS" "$IP_DETECTADA"
-pedir ADMIN_EMAIL "Tu correo para entrar al panel"
-pedir ADMIN_PASSWORD "Tu contraseña del panel (mínimo 10 caracteres)" "" oculto
-(( ${#ADMIN_PASSWORD} >= 10 )) || { echo "La contraseña debe tener al menos 10 caracteres."; exit 1; }
+pedir ADMIN_EMAIL "Tu correo para entrar al panel" "redy.delgado@gmail.com"
+clave ADMIN_PASSWORD "Contraseña del panel (nueva, no la de Gmail)"
 
 echo "== Clave previa (la pide el navegador antes del login) =="
 pedir BASIC_USER "Usuario" "neoestado"
-pedir BASIC_PASS "Contraseña (distinta de la del panel, mínimo 10)" "" oculto
-(( ${#BASIC_PASS} >= 10 )) || { echo "La contraseña debe tener al menos 10 caracteres."; exit 1; }
+clave BASIC_PASS "Contraseña de la clave previa (distinta de la del panel)"
 BASIC_HASH=$(docker run --rm caddy:2.10-alpine caddy hash-password --plaintext "$BASIC_PASS")
 
 echo "== Telegram (déjalo vacío si aún no tienes el bot) =="
